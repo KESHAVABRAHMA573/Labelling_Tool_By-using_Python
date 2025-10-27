@@ -616,3 +616,81 @@ class Load_file:
         self.canvas.focus_set()
 
 Load_file()
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+def showImagePaths(self):
+    path = self.ImagePath[self.CurrentIndex]
+    self.NumberShowing.delete(0, tk.END)
+    self.NumberShowing.insert(0, f"{self.CurrentIndex + 1}/{len(self.ImagePath)}")
+
+    self.InsidePath.delete(0, tk.END)
+    self.InsidePath.insert(0, path)
+
+    try:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File not found: {path}")
+
+        # ✅ Step 1: Read with OpenCV (keep 16-bit depth)
+        img16 = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if img16 is None:
+            raise ValueError("Failed to load image.")
+
+        # ✅ Keep a copy of the original 16-bit array for later use (training / label saving)
+        self.orig_img16 = img16.copy()
+
+        # ✅ Step 2: Convert for display only
+        if len(img16.shape) == 2:  # Grayscale
+            p1, p99 = np.percentile(img16, (1, 99))
+            if p99 == p1:
+                p1, p99 = img16.min(), img16.max()
+            img8 = np.clip((img16 - p1) * 255.0 / (p99 - p1), 0, 255).astype(np.uint8)
+            img_rgb = cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
+        else:
+            img_rgb = cv2.convertScaleAbs(img16, alpha=(255.0 / 65535.0))
+
+        # ✅ Step 3: Convert to PIL for display
+        pil_img = Image.fromarray(img_rgb)
+        self.orig_img = pil_img  # Keep PIL version for canvas use
+
+        # ✅ Step 4: Handle zoom and display
+        orig_width, orig_height = pil_img.size
+        max_w, max_h = 1525, 600
+        self.zoom_scale = min(max_w / orig_width, max_h / orig_height, 1.0)
+        self.offset_x = 0
+        self.offset_y = 0
+
+        disp_w = max(1, int(orig_width * self.zoom_scale))
+        disp_h = max(1, int(orig_height * self.zoom_scale))
+        disp_img = pil_img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+
+        self.img_tk = ImageTk.PhotoImage(disp_img)
+        self.canvas.delete("all")
+        self.canvas.config(width=self.img_tk.width(), height=self.img_tk.height())
+
+        img_x = int(-self.offset_x * self.zoom_scale)
+        img_y = int(-self.offset_y * self.zoom_scale)
+        self.canvas.create_image(img_x, img_y, image=self.img_tk, anchor=tk.NW)
+        self.canvas.bind("<Motion>", self.show_pixel)
+
+        # ✅ Reset annotation data
+        self.points.clear()
+        self.temp_line_ids.clear()
+        self.temp_point_ids.clear()
+        self.temp_shapes.clear()
+        self.polygon_id.clear()
+
+        # ✅ Load saved annotations if they exist
+        label_path = os.path.splitext(path)[0] + "_label.json"
+        if os.path.exists(label_path):
+            with open(label_path, "r") as f:
+                data = json.load(f)
+                for shape in data.get("shapes", []):
+                    if shape.get("shape_type") == "polygon":
+                        points = shape.get("points", [])
+                        self.temp_shapes.append(points)
+
+        self.redraw_canvas()
+
+    except Exception as e:
+        messagebox.showerror("Error", f"Cannot open image:\n{e}")
+
