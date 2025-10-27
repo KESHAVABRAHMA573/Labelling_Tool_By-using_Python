@@ -23,6 +23,12 @@ class Load_file:
         self.shapes_modified = False
         self.temp_line_ids = []
         self.temp_point_ids = []
+        self.orig_img=None
+        self.zoom_scale=1.0
+        self.offset_x=0.0
+        self.offset_y=0.0
+        self.min_zoom=0.1
+        self.max_zoom=8.0
 
         # Create top and bottom frames
         self.top_frame = tk.Frame(self.root, bg="white")
@@ -30,11 +36,12 @@ class Load_file:
 
         self.bottom_frame = tk.Frame(self.root, bg="lightgray")
         self.bottom_frame.pack(fill="x",pady=(0,40))
-
-        # Canvas for image display
+        
         self.canvas = tk.Canvas(self.top_frame, bg="white")
         self.canvas.pack(expand=True)
 
+
+        self.enable_click_to_zoom()
         # Controls in bottom frame
         self.Listfile = tk.Label(self.bottom_frame, text="List File:")
         self.Listfile.grid(row=0, column=0, padx=10, pady=10)
@@ -151,27 +158,48 @@ class Load_file:
         self.NumberShowing.insert(0, f"{self.CurrentIndex + 1}/{len(self.ImagePath)}")
 
         self.InsidePath.delete(0, tk.END)
-        self.InsidePath.delete(0,)
         self.InsidePath.insert(0, path)
 
         try:
-            img = Image.open(path)
-            img = img.resize((1525,640))
-            self.img_tk = ImageTk.PhotoImage(img)
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"File not found: {path}")
+            with Image.open(path) as img_check:
+                img_check.verify()
 
-            self.img=img
+            img = Image.open(path).convert("RGB")
+            self.orig_img = img
+            orig_width, orig_height = img.size
+            max_w, max_h = 1525, 600
+
+            if orig_width > max_w or orig_height > max_h:
+                initial_zoom = min(max_w / orig_width, max_h / orig_height)
+            else:
+                initial_zoom = 1.0
+
+            self.zoom_scale = initial_zoom
+            self.offset_x = 0
+            self.offset_y = 0
+
+            disp_w = max(1, int(orig_width * self.zoom_scale))
+            disp_h = max(1, int(orig_height * self.zoom_scale))
+            disp_img = img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+
+            self.img = disp_img.convert("RGB")
+            self.img_tk = ImageTk.PhotoImage(self.img)
 
             self.canvas.delete("all")
             self.canvas.config(width=self.img_tk.width(), height=self.img_tk.height())
-            self.canvas.create_image(0, 0, image=self.img_tk, anchor=tk.NW)
+            img_x = int(-self.offset_x * self.zoom_scale)
+            img_y = int(-self.offset_y * self.zoom_scale)
+            self.canvas.create_image(img_x, img_y, image=self.img_tk, anchor=tk.NW)
             self.canvas.bind("<Motion>", self.show_pixel)
 
             self.points.clear()
             self.temp_line_ids.clear()
             self.temp_point_ids.clear()
-
             self.temp_shapes.clear()
             self.polygon_id.clear()
+
             label_path = os.path.splitext(path)[0] + "_label.json"
             if os.path.exists(label_path):
                 try:
@@ -181,10 +209,6 @@ class Load_file:
                             if shape.get("shape_type") == "polygon":
                                 points = shape.get("points", [])
                                 self.temp_shapes.append(points)
-                                polygon_id = self.canvas.create_polygon(points, outline="red", fill='', width=2)
-                                self.polygon_id.append(polygon_id)
-                                
-
                 except Exception as e:
                     print(f"Error loading saved polygons: {e}")
 
@@ -193,12 +217,23 @@ class Load_file:
         except Exception as e:
             messagebox.showerror("Error", f"Cannot open image:\n{e}")
 
-    def show_pixel(self, event):
-        x, y = event.x,event.y
-        if 0 <= x < self.img.width and 0<=y < self.img.height:
-            pixel=self.img.getpixel((x,y))
-            self.coord_label.config(text=f"({x},{y}) Value={(pixel)}")
 
+    def show_pixel(self, event):
+        if self.orig_img is None:
+            return
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+        
+        img_x = int(canvas_x / self.zoom_scale)
+        img_y = int(canvas_y / self.zoom_scale)
+
+
+        orig_w, orig_h = self.orig_img.size
+        if 0 <= img_x < orig_w and 0 <= img_y < orig_h:
+            pixel = self.orig_img.getpixel((img_x, img_y))
+            self.coord_label.config(text=f"({img_x},{img_y}) Value={pixel}")
+        else:
+            self.coord_label.config(text=f"(out of bounds) X:{img_x},Y:{img_y}")
     def nextPressed(self):
         if self.ImagePath:
             self.CurrentIndex +=1
@@ -256,7 +291,7 @@ class Load_file:
                 img = Image.fromarray(mask_uint8, mode="L")     # Grayscale image
                 png_path = os.path.splitext(image_path)[0] + "_mask.png"
                 img.save(png_path)
-                #print("PNG saved:", png_path)
+                
             except Exception as e:
                 print("Failed to save PNG:", e)
 
@@ -265,17 +300,45 @@ class Load_file:
         self.update_msk_file()
 
     def redraw_canvas(self):
+        if self.orig_img is None:
+            return
+
+        orig_w, orig_h = self.orig_img.size
+        disp_w = int(orig_w * self.zoom_scale)
+        disp_h = int(orig_h * self.zoom_scale)
+
+    # Choose resampling method based on zoom direction
+        if self.zoom_scale >= 1.0:
+            resample_method = Image.Resampling.NEAREST  # Preserve sharpness when zooming in
+        else:
+            resample_method = Image.Resampling.LANCZOS  # Smooth when zooming out
+
+        disp_img = self.orig_img.resize((disp_w, disp_h), resample_method)
+        self.img = disp_img
+        self.img_tk = ImageTk.PhotoImage(self.img)
+
+        self.canvas.config(scrollregion=(0, 0, disp_w, disp_h))
+        self.canvas.config(width=disp_w, height=disp_h)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self.img_tk, anchor=tk.NW)
+
         self.polygon_id.clear()
         for shape in self.temp_shapes:
-            polygon_id=self.canvas.create_polygon(shape, outline="red", fill='', width=2)
+            screen_pts = [(int(x * self.zoom_scale), int(y * self.zoom_scale)) for (x, y) in shape]
+            flat = [coord for pt in screen_pts for coord in pt]
+            polygon_id = self.canvas.create_polygon(flat, outline="red", fill='', width=2)
             self.polygon_id.append(polygon_id)
 
         for i, point in enumerate(self.points):
-            self.canvas.create_oval(point[0]-2, point[1]-2, point[0]+2, point[1]+2, fill="red")
+            sx = int(point[0] * self.zoom_scale)
+            sy = int(point[1] * self.zoom_scale)
+            self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red")
             if i > 0:
-                self.canvas.create_line(self.points[i-1], point, fill="red", width=2)
+                prev = self.points[i-1]
+                px = int(prev[0] * self.zoom_scale)
+                py = int(prev[1] * self.zoom_scale)
+                self.canvas.create_line(px, py, sx, sy, fill="red", width=2)
+
 
     def save_annotated_image(self, image_path, shapes):
         annotated_img = self.img.copy()
@@ -286,6 +349,7 @@ class Load_file:
         annotated_img.save(annotated_path)
 
     def save_msk_file(self, image_path, shapes):
+        orig_w, orig_h = self.orig_img.size
         mask = np.zeros((self.img.height, self.img.width),dtype=np.uint8)
 
         for shape in shapes:
@@ -308,6 +372,20 @@ class Load_file:
                 print("PNG saved:", png_path)
             except Exception as e:
                 print("Failed to save PNG:", e)
+    def draw_mask_overlay(self):
+        if self.mask_data is None or self.orig_img is None:
+            return
+        
+        orig_w, orig_h = self.orig_img.size
+        scaled_w = int(orig_w * self.zoom_scale)
+        scaled_h = int(orig_h * self.zoom_scale)
+        mask_img = Image.fromarray((self.mask_data * 255).astype(np.uint8)).convert("L")
+        mask_img = mask_img.resize((scaled_w, scaled_h), Image.Resampling.NEAREST)
+
+        self.mask_tk = ImageTk.PhotoImage(mask_img)
+        self.mask_overlay_id = self.canvas.create_image(0, 0, anchor="nw", image=self.tk_mask_overlay)
+
+
      
     def savePressed(self,force=False):
         if not self.shapes_modified and not force:
@@ -319,13 +397,14 @@ class Load_file:
 
         if selected_format in ("json","both"):
             save_path = base_name + "_label.json"
+            orig_weight,orig_height=self.orig_img.size
             data = {
                 "version": "1.0.0",
                 "shapes": [],
                 "imagePath": os.path.basename(image_path),
                 "imageData": None,
-                "imageHeight": self.img.height,
-                "imageWidth": self.img.width
+                "imageHeight": orig_height,
+                "imageWidth": orig_weight
             }
             for shape_points in self.temp_shapes:
                 converted_points = []
@@ -359,6 +438,16 @@ class Load_file:
             return mask_img
         except Exception as e:
             print(f"Failed to open .msk file: {e}")
+            
+    def enable_click_to_zoom(self):
+        def zoom_in(event):
+            self.zoom_at(1.5, event.x, event.y)
+        def zoom_out(event):
+            self.zoom_at(1.0 / 1.5, event.x, event.y)
+
+        self.canvas.bind("<Shift-Button-1>", zoom_in)
+        self.canvas.bind("<Shift-Button-3>", zoom_out)
+        
     def view_msk_file(self, msk_path):
 
         if not os.path.exists(msk_path):
@@ -375,12 +464,58 @@ class Load_file:
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-    def zoomInPressed():
-        pass
+    def zoomInPressed(self):
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        center_x = canvas_w // 2
+        center_y = canvas_h // 2
+        self.zoom_at(1.2, center_x, center_y)
 
-    def zoomOutPressed():
-        pass
+    def zoomOutPressed(self):
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        center_x = canvas_w // 2
+        center_y = canvas_h // 2
+        self.zoom_at(1.0 / 1.2, center_x, center_y)
 
+
+        
+    def zoom_at(self, factor, screen_x, screen_y):
+        if self.orig_img is None:
+            return
+        old_zoom = self.zoom_scale
+        #new_zoom = old_zoom * factor
+        new_zoom = max(self.min_zoom, min(self.max_zoom, old_zoom * factor))
+        
+        img_x = screen_x / old_zoom + self.offset_x
+        img_y = screen_y / old_zoom + self.offset_y
+        
+        self.zoom_scale = new_zoom
+        self.offset_x = img_x - screen_x / new_zoom
+        self.offset_y = img_y - screen_y / new_zoom
+        
+        max_offset_x = max(0, self.orig_img.size[0] - self.canvas.winfo_width() / self.zoom_scale)
+        max_offset_y = max(0, self.orig_img.size[1] - self.canvas.winfo_height() / self.zoom_scale)
+
+        self.offset_x = max(0, min(self.offset_x, max_offset_x))
+        self.offset_y = max(0, min(self.offset_y, max_offset_y))
+
+        self.redraw_canvas()
+        
+    '''def _on_mouse_wheel(self, event):
+        
+        if hasattr(event, "delta"):
+            delta = event.delta
+        else:
+
+            if event.num == 4:
+                delta = 120
+            else:
+                delta = -120
+        if delta > 0:
+            self.zoom_at(1.2, event.x, event.y)
+        else:
+            self.zoom_at(1.0 / 1.2, event.x, event.y)'''
     
 
     def show_msk_file(self, event=None):
@@ -395,10 +530,15 @@ class Load_file:
             h, w = struct.unpack('II', header)
             data = f.read()
             mask = np.frombuffer(data, dtype=np.uint8).reshape((h, w))
+        self.mask_data=mask
+        
+        scaled_w = int(w * self.zoom_scale)
+        scaled_h = int(h * self.zoom_scale)
+        visible_mask = np.where(mask > 0, 255, 0).astype(np.uint8)
+        
+        mask_img = Image.fromarray(visible_mask).convert("L")
+        mask_img = mask_img.resize((scaled_w, scaled_h), Image.Resampling.NEAREST)
 
-    
-        from PIL import Image, ImageTk
-        mask_img = Image.fromarray(mask).convert("L") 
         self.tk_mask_overlay = ImageTk.PhotoImage(mask_img)
         self.mask_overlay_id = self.canvas.create_image(0, 0, anchor="nw", image=self.tk_mask_overlay)
 
@@ -406,189 +546,57 @@ class Load_file:
         if hasattr(self, "mask_overlay_id"):
             self.canvas.delete(self.mask_overlay_id)
             del self.mask_overlay_id
-
-
-    def labellingPressed(self):
-        def on_left_click(event):
-            self.points.append((event.x,event.y))
-            point_id=self.canvas.create_oval(event.x-2,event.y-2,event.x+2,event.y+2,fill="red")
-            self.temp_point_ids.append(point_id)
-
-            if len(self.points)>1:
-                line_id = self.canvas.create_line(self.points[-2], self.points[-1], fill="red", width=2)
-                self.temp_line_ids.append(line_id)
-
-        def on_right_click(event):
-            self.shapes_modified = True
-            if len(self.points) > 2:
-                polygon_id=self.canvas.create_polygon(self.points,outline="red",fill='',width=2)
-                self.polygon_id.append(polygon_id)
-                self.new_shapes.append(list(self.points))
-                self.temp_shapes.append(list(self.points))
-            
-            for line_id in self.temp_line_ids:
-                self.canvas.delete(line_id)
-            self.temp_line_ids.clear()
-            self.temp_line_ids.clear()
-            for point_id in self.temp_point_ids:
-                self.canvas.delete(point_id)
-            self.temp_point_ids.clear()
-            self.points.clear()
-        self.canvas.bind("<Button-1>" ,on_left_click)
-        self.canvas.bind("<Button-3>" ,on_right_click)
-        self.root.bind("<BackSpace>", lambda event :self.undoPressed())
-        
-        self.canvas.focus_set()
-
-Load_file()
-
-def showImagePaths(self):
-        path = self.ImagePath[self.CurrentIndex]
-        self.NumberShowing.delete(0, tk.END)
-        self.NumberShowing.insert(0, f"{self.CurrentIndex + 1}/{len(self.ImagePath)}")
-
-        self.InsidePath.delete(0, tk.END)
-        self.InsidePath.insert(0, path)
-
-        try:
-            # --- load original image (keep full resolution) ---
-            self.orig_img = Image.open(path).convert("RGBA")  # keep alpha for overlays
-            orig_w, orig_h = self.orig_img.size
-
-            # --- initial zoom logic: only shrink if image is bigger than limit; do NOT upscale ---
-            max_w, max_h = 1525, 640
-            if orig_w > max_w or orig_h > max_h:
-                initial_zoom = min(max_w / orig_w, max_h / orig_h)
-            else:
-                initial_zoom = 1.0
-
-            self.zoom_scale = initial_zoom
-            self.offset_x = 0.0
-            self.offset_y = 0.0
-
-            # prepare displayed image at current zoom
-            disp_w = max(1, int(orig_w * self.zoom_scale))
-            disp_h = max(1, int(orig_h * self.zoom_scale))
-            disp_img = self.orig_img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
-            self.img = disp_img.convert("RGB")
-            self.img_tk = ImageTk.PhotoImage(self.img)
-
-            # canvas setup
-            self.canvas.delete("all")
-            self.canvas.config(width=self.img_tk.width(), height=self.img_tk.height())
-            self.canvas.create_image(0, 0, image=self.img_tk, anchor=tk.NW, tags=("IMG"))
-
-            # mouse motion update
-            self.canvas.bind("<Motion>", self.show_pixel)
-
-            # reset temporary drawing state
-            self.points.clear()
-            self.temp_line_ids.clear()
-            self.temp_point_ids.clear()
-            self.temp_shapes.clear()
-            self.polygon_id.clear()
-
-            # load saved polygons (they are stored in original-image coordinates)
-            label_path = os.path.splitext(path)[0] + "_label.json"
-            if os.path.exists(label_path):
-                try:
-                    with open(label_path, "r") as f:
-                        data = json.load(f)
-                        for shape in data.get("shapes", []):
-                            if shape.get("shape_type") == "polygon":
-                                points = shape.get("points", [])
-                                # points are expected in original-image coordinates
-                                self.temp_shapes.append(points)
-                except Exception as e:
-                    print(f"Error loading saved polygons: {e}")
-
-            # finally redraw polygons on top of the displayed (possibly resized) image
-            self.redraw_canvas()
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Cannot open image:\n{e}")
-            def redraw_canvas(self):
-        # Clear canvas and draw the zoomed image and all shapes/points transformed to screen coords
-        if self.orig_img is None:
+    def show_msk_pressed(self):
+        if self.orig_img is None or self.mask_data is None:
             return
+        self.zoom_scale = 1.0
+        self.offset_x = 0
+        self.offset_y = 0
+        self.redraw_canvas()
 
-        orig_w, orig_h = self.orig_img.size
-        disp_w = max(1, int(orig_w * self.zoom_scale))
-        disp_h = max(1, int(orig_h * self.zoom_scale))
+        self.draw_mask_overlay()
 
-        # create resized display image from original (keeps sharpness)
-        disp_img = self.orig_img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
-        self.img = disp_img.convert("RGB")
-        self.img_tk = ImageTk.PhotoImage(self.img)
-
-        self.canvas.delete("all")
-        # Place image at top-left (we don't implement scrollbars here)
-        self.canvas.config(width=self.img_tk.width(), height=self.img_tk.height())
-        self.canvas.create_image(0, 0, image=self.img_tk, anchor=tk.NW, tags=("IMG"))
-
-        # draw existing polygons (stored in original image coordinates)
-        self.polygon_id.clear()
-        for shape in self.temp_shapes:
-            screen_pts = []
-            for (x, y) in shape:
-                sx = int((x - self.offset_x) * self.zoom_scale)
-                sy = int((y - self.offset_y) * self.zoom_scale)
-                screen_pts.append((sx, sy))
-            # flatten for create_polygon
-            flat = [coord for pt in screen_pts for coord in pt]
-            polygon_id = self.canvas.create_polygon(flat, outline="red", fill='', width=2)
-            self.polygon_id.append(polygon_id)
-
-        # draw current temporary points (self.points are in original coords when added)
-        for i, point in enumerate(self.points):
-            sx = int((point[0] - self.offset_x) * self.zoom_scale)
-            sy = int((point[1] - self.offset_y) * self.zoom_scale)
-            self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red")
-            if i > 0:
-                prev = self.points[i-1]
-                px = int((prev[0] - self.offset_x) * self.zoom_scale)
-                py = int((prev[1] - self.offset_y) * self.zoom_scale)
-                self.canvas.create_line(px, py, sx, sy, fill="red", width=2)
     def labellingPressed(self):
+        
         def on_left_click(event):
-            # Convert screen coords to original image coords
-            img_x = event.x / self.zoom_scale + self.offset_x
-            img_y = event.y / self.zoom_scale + self.offset_y
 
-            # Clamp within original image bounds
+            canvas_x = self.canvas.canvasx(event.x)
+            canvas_y = self.canvas.canvasy(event.y)
+
+            
+            img_x = canvas_x / self.zoom_scale
+            img_y = canvas_y / self.zoom_scale
+            
             orig_w, orig_h = self.orig_img.size
             img_x = min(max(img_x, 0), orig_w - 1)
             img_y = min(max(img_y, 0), orig_h - 1)
 
+
             self.points.append((img_x, img_y))
 
-            # draw temporary point/line in screen coords for immediate feedback
-            sx = int((img_x - self.offset_x) * self.zoom_scale)
-            sy = int((img_y - self.offset_y) * self.zoom_scale)
+            sx = int(img_x * self.zoom_scale)
+            sy = int(img_y * self.zoom_scale)
             point_id = self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red")
             self.temp_point_ids.append(point_id)
 
             if len(self.points) > 1:
                 prev = self.points[-2]
-                px = int((prev[0] - self.offset_x) * self.zoom_scale)
-                py = int((prev[1] - self.offset_y) * self.zoom_scale)
+                px = int(prev[0] * self.zoom_scale)
+                py = int(prev[1] *  self.zoom_scale)
                 line_id = self.canvas.create_line(px, py, sx, sy, fill="red", width=2)
                 self.temp_line_ids.append(line_id)
 
         def on_right_click(event):
-            # finalize polygon: points are already in original-image coords
+
             self.shapes_modified = True
             if len(self.points) > 2:
                 polygon_id = self.canvas.create_polygon(
-                    [coord for p in [(int((x - self.offset_x) * self.zoom_scale), int((y - self.offset_y) * self.zoom_scale)) for x, y in self.points] for coord in p],
-                    outline="red", fill='', width=2
-                )
+                    [coord for p in [(int(x * self.zoom_scale), int(y  * self.zoom_scale)) for x, y in self.points] for coord in p],
+                    outline="red", fill='', width=2)
                 self.polygon_id.append(polygon_id)
-                # Save the polygon in original-image coordinates
                 self.temp_shapes.append([(float(x), float(y)) for x, y in self.points])
                 self.new_shapes.append(list(self.points))
 
-            # clear temporary line/points
             for line_id in self.temp_line_ids:
                 self.canvas.delete(line_id)
             self.temp_line_ids.clear()
@@ -596,161 +604,15 @@ def showImagePaths(self):
                 self.canvas.delete(point_id)
             self.temp_point_ids.clear()
             self.points.clear()
-
-        # bind left and right clicks
-        self.canvas.bind("<Button-1>", on_left_click)
-        self.canvas.bind("<Button-3>", on_right_click)
-        # undo with BackSpace (undo last point of current in-progress polygon)
-        self.root.bind("<BackSpace>", lambda event: self.undoPressed())
-
-        # allow mouse wheel zoom too (Ctrl+wheel for example) and wheel alone
-        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)        # Windows
+                
+        self.canvas.bind("<Button-1>" ,on_left_click)
+        self.canvas.bind("<Button-3>" ,on_right_click)
+        self.root.bind("<BackSpace>", lambda event :self.undoPressed())
+        
+        '''self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)        # Windows
         self.canvas.bind("<Button-4>", self._on_mouse_wheel)         # Linux scroll up
-        self.canvas.bind("<Button-5>", self._on_mouse_wheel)         # Linux scroll down
-
+        self.canvas.bind("<Button-5>", self._on_mouse_wheel)''' 
+        
         self.canvas.focus_set()
 
-def _on_mouse_wheel(self, event):
-        # Normalize wheel delta across platforms
-        if hasattr(event, "delta"):
-            delta = event.delta
-        else:
-            # Linux: Button-4 / Button-5
-            if event.num == 4:
-                delta = 120
-            else:
-                delta = -120
-
-        # choose factor
-        if delta > 0:
-            self.zoom_at(1.2, event.x, event.y)
-        else:
-            self.zoom_at(1.0 / 1.2, event.x, event.y)
-
-    def zoomInPressed(self):
-        # use current mouse pointer on canvas as pivot
-        sx = self.canvas.winfo_pointerx() - self.canvas.winfo_rootx()
-        sy = self.canvas.winfo_pointery() - self.canvas.winfo_rooty()
-        self.zoom_at(1.2, sx, sy)
-
-    def zoomOutPressed(self):
-        sx = self.canvas.winfo_pointerx() - self.canvas.winfo_rootx()
-        sy = self.canvas.winfo_pointery() - self.canvas.winfo_rooty()
-        self.zoom_at(1.0 / 1.2, sx, sy)
-
-    def zoom_at(self, factor, screen_x, screen_y):
-        """
-        Zoom centered at canvas screen coords (screen_x, screen_y).
-        Points are stored in original image coords; we adjust offset so the image point under
-        the mouse stays at the same screen position.
-        """
-        if self.orig_img is None:
-            return
-
-        old_zoom = self.zoom_scale
-        new_zoom = old_zoom * factor
-        # clamp new zoom
-        new_zoom = max(self.min_zoom, min(self.max_zoom, new_zoom))
-        factor = new_zoom / old_zoom  # adjust factor if clamped
-        if abs(factor - 1.0) < 1e-6:
-            return
-
-        # image coordinate under screen point
-        img_x = screen_x / old_zoom + self.offset_x
-        img_y = screen_y / old_zoom + self.offset_y
-
-        # update zoom
-        self.zoom_scale = new_zoom
-
-        # compute new offset so that img_x/img_y remains under same screen point
-        self.offset_x = img_x - screen_x / new_zoom
-        self.offset_y = img_y - screen_y / new_zoom
-
-        # NOTE: We intentionally do not implement strict panning/clamping here
-        # to keep implementation simpler. Offsets can go slightly negative when zooming
-        # near borders; that only shifts the canvas drawing origin.
-
-        # redraw with updated zoom/offset
-        self.redraw_canvas()
-
-
----
-
-def show_pixel(self, event):
-        if self.orig_img is None:
-            return
-        # convert screen coords to original coords
-        img_x = int(event.x / self.zoom_scale + self.offset_x)
-        img_y = int(event.y / self.zoom_scale + self.offset_y)
-        orig_w, orig_h = self.orig_img.size
-        if 0 <= img_x < orig_w and 0 <= img_y < orig_h:
-            pixel = self.orig_img.getpixel((img_x, img_y))
-            self.coord_label.config(text=f"({img_x},{img_y}) Value={pixel}")
-        else:
-            self.coord_label.config(text=f"(out of bounds) X:{img_x},Y:{img_y}")
-
-
----
-Important: your existing save_msk_file() and savePressed() already write masks and JSON using self.img.height and self.img.width — update to use original image dimensions when saving so masks match original-size coordinates.
-
-Replace in savePressed() where you set imageHeight and imageWidth and data to use original image size (self.orig_img.size) instead of self.img.height / self.img.width. Replace the save code block (the JSON creation part) with:
-
-if selected_format in ("json","both"):
-            save_path = base_name + "_label.json"
-            orig_w, orig_h = self.orig_img.size
-            data = {
-                "version": "1.0.0",
-                "shapes": [],
-                "imagePath": os.path.basename(image_path),
-                "imageData": None,
-                "imageHeight": orig_h,
-                "imageWidth": orig_w
-            }
-            for shape_points in self.temp_shapes:
-                converted_points = []
-                for point in shape_points:
-                    x = int(point[0])
-                    y = int(point[1])
-                    converted_points.append([x, y])
-                shape = {}
-                shape["label"] = "container"
-                shape["points"] = converted_points
-                shape["group_id"] = None
-                shape["description"] = ""
-                shape["shape_type"] = "polygon"
-                shape["mask"] = None
-                data["shapes"].append(shape)
-
-            with open(save_path, "w") as file:
-                json.dump(data, file, indent=4)
-
-Also update save_msk_file() to use orig_img.size for height/width instead of self.img.height/self.img.width. Replace the beginning of that method with:
-
-orig_w, orig_h = self.orig_img.size
-        mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
-
-        for shape in shapes:
-            pts = np.array(shape, dtype=np.int32)
-            cv2.fillPoly(mask, [pts], 255)
-
-        msk_path = os.path.splitext(image_path)[0] + "_label.msk"
-        if os.path.exists(msk_path):
-            os.remove(msk_path)
-
-        with open(msk_path, "wb") as f:
-            f.write(struct.pack('II', orig_h, orig_w))
-            f.write(mask.tobytes())
-        if self.show_mask_var.get():
-            try:
-                mask_uint8 = (mask > 0).astype(np.uint8) * 255
-                img = Image.fromarray(mask_uint8, mode="L")
-                png_path = os.path.splitext(image_path)[0] + "_mask.png"
-                img.save(png_path)
-                print("PNG saved:", png_path)
-            except Exception as e:
-                print("Failed to save PNG:", e)
-
-
-
-
-
+Load_file()
