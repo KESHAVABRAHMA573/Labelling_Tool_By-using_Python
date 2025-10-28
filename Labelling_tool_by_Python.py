@@ -35,10 +35,25 @@ class Load_file:
         self.top_frame.pack(fill="both", expand=True)
 
         self.bottom_frame = tk.Frame(self.root, bg="lightgray")
-        self.bottom_frame.pack(fill="x",pady=(0,40))
+        self.bottom_frame.pack(fill="x",pady=(0,30))
         
-        self.canvas = tk.Canvas(self.top_frame, bg="white")
-        self.canvas.pack(expand=True)
+        self.canvas_frame = tk.Frame(self.top_frame)
+        self.canvas_frame.pack(fill="both", expand=True)
+
+        self.canvas = tk.Canvas(self.canvas_frame, bg="white")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+
+        self.v_scroll = tk.Scrollbar(self.canvas_frame, orient="vertical", command=self.canvas.yview)
+        self.v_scroll.grid(row=0, column=1, sticky="ns")
+
+        self.h_scroll = tk.Scrollbar(self.canvas_frame, orient="horizontal", command=self.canvas.xview)
+        self.h_scroll.grid(row=1, column=0, sticky="ew")
+
+        self.canvas.configure(yscrollcommand=self.v_scroll.set, xscrollcommand=self.h_scroll.set)
+
+        self.canvas_frame.rowconfigure(0, weight=1)
+        self.canvas_frame.columnconfigure(0, weight=1)
+
 
 
         self.enable_click_to_zoom()
@@ -113,6 +128,10 @@ class Load_file:
 
         self.zoomout=tk.Button(self.bottom_frame,text="Zoom_out",command=self.zoomOutPressed)
         self.zoomout.grid(row=2,column=16,padx=10,pady=10)
+        
+        self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(-1 * int(e.delta / 120), "units"))
+        self.canvas.bind_all("<Shift-MouseWheel>", lambda e: self.canvas.xview_scroll(-1 * int(e.delta / 120), "units"))
+
 
         
         self.root.mainloop()
@@ -153,6 +172,7 @@ class Load_file:
             messagebox.showerror("Error", f"Failed to load file:\n{e}")
 
     def showImagePaths(self):
+    
         path = self.ImagePath[self.CurrentIndex]
         self.NumberShowing.delete(0, tk.END)
         self.NumberShowing.insert(0, f"{self.CurrentIndex + 1}/{len(self.ImagePath)}")
@@ -163,59 +183,74 @@ class Load_file:
         try:
             if not os.path.exists(path):
                 raise FileNotFoundError(f"File not found: {path}")
-            with Image.open(path) as img_check:
-                img_check.verify()
 
-            img = Image.open(path).convert("RGB")
-            self.orig_img = img
-            orig_width, orig_height = img.size
-            max_w, max_h = 1525, 600
+        #    Read with OpenCV (keep 16-bit depth)
+            img16 = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+            if img16 is None:
+                raise ValueError("Failed to load image.")
 
-            if orig_width > max_w or orig_height > max_h:
-                initial_zoom = min(max_w / orig_width, max_h / orig_height)
+        # Keep a copy of the original 16-bit array for later use (training / label saving)
+            self.orig_img16 = img16.copy()
+
+        #   Convert for display only
+            if len(img16.shape) == 2:  # Grayscale
+                p1, p99 = np.percentile(img16, (1, 99))
+                if p99 == p1:
+                    p1, p99 = img16.min(), img16.max()
+                img8 = np.clip((img16 - p1) * 255.0 / (p99 - p1), 0, 255).astype(np.uint8)
+                img_rgb = cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
             else:
-                initial_zoom = 1.0
+                img_rgb = cv2.convertScaleAbs(img16, alpha=(255.0 / 65535.0))
+                
 
-            self.zoom_scale = initial_zoom
+        #  Step 3: Convert to PIL for display
+            pil_img = Image.fromarray(img_rgb)
+            self.orig_img = pil_img  # Keep PIL version for canvas use
+
+        #  Step 4: Handle zoom and display
+            orig_width, orig_height = pil_img.size
+            max_w, max_h = 1525, 600
+            self.zoom_scale = min(max_w / orig_width, max_h / orig_height, 1.0)
             self.offset_x = 0
             self.offset_y = 0
 
             disp_w = max(1, int(orig_width * self.zoom_scale))
             disp_h = max(1, int(orig_height * self.zoom_scale))
-            disp_img = img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+            disp_img = pil_img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
 
-            self.img = disp_img.convert("RGB")
-            self.img_tk = ImageTk.PhotoImage(self.img)
-
+            self.img_tk = ImageTk.PhotoImage(disp_img)
             self.canvas.delete("all")
             self.canvas.config(width=self.img_tk.width(), height=self.img_tk.height())
+            self.canvas.config(scrollregion=(0, 0, disp_w, disp_h))
+
+
             img_x = int(-self.offset_x * self.zoom_scale)
             img_y = int(-self.offset_y * self.zoom_scale)
             self.canvas.create_image(img_x, img_y, image=self.img_tk, anchor=tk.NW)
             self.canvas.bind("<Motion>", self.show_pixel)
 
+        #  Reset annotation data
             self.points.clear()
             self.temp_line_ids.clear()
             self.temp_point_ids.clear()
             self.temp_shapes.clear()
             self.polygon_id.clear()
 
+        # Load saved annotations if they exist
             label_path = os.path.splitext(path)[0] + "_label.json"
             if os.path.exists(label_path):
-                try:
-                    with open(label_path, "r") as f:
-                        data = json.load(f)
-                        for shape in data.get("shapes", []):
-                            if shape.get("shape_type") == "polygon":
-                                points = shape.get("points", [])
-                                self.temp_shapes.append(points)
-                except Exception as e:
-                    print(f"Error loading saved polygons: {e}")
+                with open(label_path, "r") as f:
+                    data = json.load(f)
+                    for shape in data.get("shapes", []):
+                        if shape.get("shape_type") == "polygon":
+                            points = shape.get("points", [])
+                            self.temp_shapes.append(points)
 
             self.redraw_canvas()
 
         except Exception as e:
             messagebox.showerror("Error", f"Cannot open image:\n{e}")
+
 
 
     def show_pixel(self, event):
@@ -239,9 +274,7 @@ class Load_file:
             self.CurrentIndex +=1
             if self.CurrentIndex >= len(self.ImagePath):
                 self.CurrentIndex = 0
-
             self.showImagePaths()
-
     def previousPressed(self):
         if self.ImagePath:
             self.CurrentIndex -= 1
@@ -255,7 +288,7 @@ class Load_file:
             self.redraw_canvas()
 
         else:
-            messagebox.showinfo("Undo", "No poiints are there to undo these")
+            messagebox.showinfo("Undo", "No points are There to Undo Here")
     def enable_polygon_deletion(self):
         def on_click(event):
             clicked_items = self.canvas.find_overlapping(event.x, event.y, event.x, event.y)
@@ -321,7 +354,7 @@ class Load_file:
         self.canvas.config(width=disp_w, height=disp_h)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self.img_tk, anchor=tk.NW)
-
+        
         self.polygon_id.clear()
         for shape in self.temp_shapes:
             screen_pts = [(int(x * self.zoom_scale), int(y * self.zoom_scale)) for (x, y) in shape]
@@ -441,12 +474,12 @@ class Load_file:
             
     def enable_click_to_zoom(self):
         def zoom_in(event):
-            self.zoom_at(1.5, event.x, event.y)
+            self.zoom_at(1.2, event.x, event.y)
         def zoom_out(event):
-            self.zoom_at(1.0 / 1.5, event.x, event.y)
+            self.zoom_at(1.0 / 1.2, event.x, event.y)
 
-        self.canvas.bind("<Shift-Button-1>", zoom_in)
-        self.canvas.bind("<Shift-Button-3>", zoom_out)
+        self.canvas.bind("<Control-Button-1>", zoom_in)
+        self.canvas.bind("<Control-Button-3>", zoom_out)
         
     def view_msk_file(self, msk_path):
 
@@ -477,9 +510,7 @@ class Load_file:
         center_x = canvas_w // 2
         center_y = canvas_h // 2
         self.zoom_at(1.0 / 1.2, center_x, center_y)
-
-
-        
+    
     def zoom_at(self, factor, screen_x, screen_y):
         if self.orig_img is None:
             return
@@ -502,7 +533,7 @@ class Load_file:
 
         self.redraw_canvas()
         
-    '''def _on_mouse_wheel(self, event):
+    def _on_mouse_wheel(self, event):
         
         if hasattr(event, "delta"):
             delta = event.delta
@@ -515,7 +546,7 @@ class Load_file:
         if delta > 0:
             self.zoom_at(1.2, event.x, event.y)
         else:
-            self.zoom_at(1.0 / 1.2, event.x, event.y)'''
+            self.zoom_at(1.0 / 1.2, event.x, event.y)
     
 
     def show_msk_file(self, event=None):
@@ -607,90 +638,14 @@ class Load_file:
                 
         self.canvas.bind("<Button-1>" ,on_left_click)
         self.canvas.bind("<Button-3>" ,on_right_click)
-        self.root.bind("<BackSpace>", lambda event :self.undoPressed())
+        self.root.bind("<Delete>", lambda event :self.undoPressed())
         
-        '''self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)        # Windows
+        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)        # Windows
         self.canvas.bind("<Button-4>", self._on_mouse_wheel)         # Linux scroll up
-        self.canvas.bind("<Button-5>", self._on_mouse_wheel)''' 
+        self.canvas.bind("<Button-5>", self._on_mouse_wheel) 
         
         self.canvas.focus_set()
 
 Load_file()
 
---------------------------------------------------------------------------------------------------------------------------------------------
-def showImagePaths(self):
-    path = self.ImagePath[self.CurrentIndex]
-    self.NumberShowing.delete(0, tk.END)
-    self.NumberShowing.insert(0, f"{self.CurrentIndex + 1}/{len(self.ImagePath)}")
-
-    self.InsidePath.delete(0, tk.END)
-    self.InsidePath.insert(0, path)
-
-    try:
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"File not found: {path}")
-
-        # ✅ Step 1: Read with OpenCV (keep 16-bit depth)
-        img16 = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-        if img16 is None:
-            raise ValueError("Failed to load image.")
-
-        # ✅ Keep a copy of the original 16-bit array for later use (training / label saving)
-        self.orig_img16 = img16.copy()
-
-        # ✅ Step 2: Convert for display only
-        if len(img16.shape) == 2:  # Grayscale
-            p1, p99 = np.percentile(img16, (1, 99))
-            if p99 == p1:
-                p1, p99 = img16.min(), img16.max()
-            img8 = np.clip((img16 - p1) * 255.0 / (p99 - p1), 0, 255).astype(np.uint8)
-            img_rgb = cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
-        else:
-            img_rgb = cv2.convertScaleAbs(img16, alpha=(255.0 / 65535.0))
-
-        # ✅ Step 3: Convert to PIL for display
-        pil_img = Image.fromarray(img_rgb)
-        self.orig_img = pil_img  # Keep PIL version for canvas use
-
-        # ✅ Step 4: Handle zoom and display
-        orig_width, orig_height = pil_img.size
-        max_w, max_h = 1525, 600
-        self.zoom_scale = min(max_w / orig_width, max_h / orig_height, 1.0)
-        self.offset_x = 0
-        self.offset_y = 0
-
-        disp_w = max(1, int(orig_width * self.zoom_scale))
-        disp_h = max(1, int(orig_height * self.zoom_scale))
-        disp_img = pil_img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
-
-        self.img_tk = ImageTk.PhotoImage(disp_img)
-        self.canvas.delete("all")
-        self.canvas.config(width=self.img_tk.width(), height=self.img_tk.height())
-
-        img_x = int(-self.offset_x * self.zoom_scale)
-        img_y = int(-self.offset_y * self.zoom_scale)
-        self.canvas.create_image(img_x, img_y, image=self.img_tk, anchor=tk.NW)
-        self.canvas.bind("<Motion>", self.show_pixel)
-
-        # ✅ Reset annotation data
-        self.points.clear()
-        self.temp_line_ids.clear()
-        self.temp_point_ids.clear()
-        self.temp_shapes.clear()
-        self.polygon_id.clear()
-
-        # ✅ Load saved annotations if they exist
-        label_path = os.path.splitext(path)[0] + "_label.json"
-        if os.path.exists(label_path):
-            with open(label_path, "r") as f:
-                data = json.load(f)
-                for shape in data.get("shapes", []):
-                    if shape.get("shape_type") == "polygon":
-                        points = shape.get("points", [])
-                        self.temp_shapes.append(points)
-
-        self.redraw_canvas()
-
-    except Exception as e:
-        messagebox.showerror("Error", f"Cannot open image:\n{e}")
 
