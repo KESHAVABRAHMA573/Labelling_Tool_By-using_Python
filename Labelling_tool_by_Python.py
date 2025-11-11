@@ -6,6 +6,7 @@ import json
 import struct
 import numpy as np
 import cv2
+import scipy.ndimage
 
 class Load_file:
     def __init__(self):
@@ -49,13 +50,11 @@ class Load_file:
         self.bottom_frame = tk.Frame(self.root, bg="lightgray")
         self.bottom_frame.pack(side="bottom", fill="x")
 
-
         self.canvas_frame = tk.Frame(self.top_frame)
         self.canvas_frame.pack(fill="both", expand=True)
         
         self.brightness_var = tk.DoubleVar(value=1.0)
         self.contrast_var = tk.DoubleVar(value=1.0)
-
 
         self.canvas = tk.Canvas(self.canvas_frame, bg="white")
         self.canvas.grid(row=0, column=0, sticky="nsew")
@@ -69,126 +68,158 @@ class Load_file:
         self.canvas.configure(yscrollcommand=self.v_scroll.set, xscrollcommand=self.h_scroll.set)
         self.canvas_frame.rowconfigure(0, weight=1)
         self.canvas_frame.columnconfigure(0, weight=1)
-
+    
         self.enable_click_to_zoom()
 
         # Bottom controls (kept your layout)
         self.Listfile = tk.Label(self.bottom_frame, text="List File:")
-        self.Listfile.grid(row=0, column=0, padx=10, pady=10)
+        self.Listfile.grid(row=0, column=0, padx=0, pady=0)
 
-        self.Load1 = tk.Entry(self.bottom_frame, width=50)
-        self.Load1.grid(row=0, column=1, padx=10, pady=10)
+        self.Load1 = tk.Entry(self.bottom_frame, width=25)
+        self.Load1.grid(row=0, column=1, padx=0, pady=0)
 
-        self.Browse = tk.Button(self.bottom_frame, text="Browse", command=self.browsePressed)
+        self.Browse = tk.Button(self.bottom_frame, text=" Browse ", command=self.browsePressed)
         self.Browse.grid(row=0, column=2, padx=10, pady=10)
 
-        self.Load = tk.Button(self.bottom_frame, text="Load", command=self.loadPressed)
-        self.Load.grid(row=1, column=1, padx=10, pady=10)
-
-        self.Clear = tk.Button(self.bottom_frame, text="Clear", command=self.clearPressed)
-        self.Clear.grid(row=1, column=2, padx=10, pady=10)
-
         self.NumberShowing = tk.Entry(self.bottom_frame, width=8)
-        self.NumberShowing.grid(row=2, column=0, padx=10, pady=10)
+        self.NumberShowing.grid(row=1, column=0, padx=10, pady=10)
 
-        self.InsidePath = tk.Entry(self.bottom_frame, width=50)
-        self.InsidePath.grid(row=2, column=1, padx=10, pady=10)
+        self.InsidePath = tk.Entry(self.bottom_frame, width=25)
+        self.InsidePath.grid(row=1, column=1, padx=10, pady=10)
 
         self.Previous = tk.Button(self.bottom_frame, text="Previous", command=self.previousPressed)
-        self.Previous.grid(row=2, column=2, padx=10, pady=10)
+        self.Previous.grid(row=1, column=2, padx=10, pady=10)
 
         self.Next = tk.Button(self.bottom_frame, text="Next", command=self.nextPressed)
-        self.Next.grid(row=2, column=3, padx=10, pady=10)
+        self.Next.grid(row=1, column=3, padx=0, pady=0)
 
         self.save = tk.Button(self.bottom_frame ,text="Save", command=self.savePressed)
-        self.save.grid(row=0, column=11, padx=10, pady=10)
+        self.save.grid(row=0, column=9, padx=10, pady=10)
 
-        self.coord_label = tk.Label(self.bottom_frame, text="X: 0, Y: 0", width=50, height=2, font=("Bold",10))
-        self.coord_label.grid(row=0, column=5, columnspan=2,padx=10, pady=5)
+        self.coord_label = tk.Label(self.bottom_frame, text="X: 0, Y: 0", width=25, height=2, font=("Bold",10))
+        self.coord_label.grid(row=2, column=0,columnspan=2, padx=5, pady=5)
         
-        # Brightness label and slider
-        tk.Label(self.bottom_frame, text="Brightness").grid(row=1, column=5,sticky="e", padx=5, pady=2)
-        tk.Scale(self.bottom_frame, from_=-1.0, to=3.0, resolution=0.1, orient="horizontal",
-         variable=self.brightness_var, command=self.update_image).grid(row=1, column=6,sticky="w", padx=80, pady=2)
+        self.reset_btn = tk.Button(self.bottom_frame, text="Reset", command=self.reset_brightness_contrast)
+        self.reset_btn.grid(row=1, column=6, columnspan=2, padx=0, pady=2)
 
-# Contrast label and slider
-        tk.Label(self.bottom_frame, text="Contrast").grid(row=2, column=5,sticky="e", padx=5, pady=2)
-        tk.Scale(self.bottom_frame, from_=0.1, to=3.0, resolution=0.1, orient="horizontal",
-         variable=self.contrast_var, command=self.update_image).grid(row=2, column=6,sticky="w", padx=80, pady=2)
+        # Brightness label and slider
+        brightness_frame = tk.Frame(self.bottom_frame)
+        brightness_frame.grid(row=1, column=4, columnspan=4, sticky="w", padx=10, pady=2)
+
+        tk.Label(brightness_frame, text="Brightness", width=10, anchor="w").pack(side="left")
+        tk.Button(brightness_frame, text="◀", width=2, command=lambda: self.adjust_brightness(-0.1)).pack(side="left")
+        tk.Scale(brightness_frame, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
+         variable=self.brightness_var, command=self.update_image, length=200).pack(side="left")
+        tk.Button(brightness_frame, text="▶", width=2, command=lambda: self.adjust_brightness(0.1)).pack(side="left")
+
+        contrast_frame = tk.Frame(self.bottom_frame)
+        contrast_frame.grid(row=2, column=4, columnspan=4, sticky="w", padx=10, pady=2)
+
+        tk.Label(contrast_frame, text="Contrast", width=10, anchor="w").pack(side="left")
+        tk.Button(contrast_frame, text="◀", width=2, command=lambda: self.adjust_contrast(-0.1)).pack(side="left")
+        tk.Scale(contrast_frame, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
+         variable=self.contrast_var, command=self.update_image, length=200).pack(side="left")
+        tk.Button(contrast_frame, text="▶", width=2, command=lambda: self.adjust_contrast(0.1)).pack(side="left")
 
         self.Labeling = tk.Button(self.bottom_frame, text="Start labelling", command=self.labellingPressed)
-        self.Labeling.grid(row=0, column=9, padx=10, pady=10)
+        self.Labeling.grid(row=0, column=8, padx=10, pady=10)
 
         self.Undo = tk.Button(self.bottom_frame, text="Undo", command=self.undoPressed)
-        self.Undo.grid(row=2, column=9, padx=10, pady=10)
+        self.Undo.grid(row=2, column=8, padx=10, pady=10)
         
         self.fitWindow=tk.Button(self.bottom_frame,text="Fit Window",command=self.fitWindowPressed)
-        self.fitWindow.grid(row=0,column=15 ,padx=10,pady=10)
+        self.fitWindow.grid(row=0,column=12 ,padx=10,pady=10)
 
         self.Delete = tk.Button(self.bottom_frame, text="Delete", command=self.deletePressed)
-        self.Delete.grid(row=2, column=11, padx=10, pady=10)
+        self.Delete.grid(row=2, column=9, padx=10, pady=10)
 
         self.formatSelector = tk.StringVar(value="json")
         self.json = tk.Radiobutton(self.bottom_frame, text="  Json   ", variable=self.formatSelector, value="json")
-        self.json.grid(row=0, column=14, padx=10, pady=10)
-        self.msk = tk.Radiobutton(self.bottom_frame, text="   MSK    ", variable=self.formatSelector, value="msk")
-        self.msk.grid(row=1, column=14, padx=10, pady=10)
+        self.json.grid(row=0, column=10, padx=10, pady=10)
+        
         self.both = tk.Radiobutton(self.bottom_frame, text="Json & MSK", variable=self.formatSelector, value="both")
-        self.both.grid(row=2, column=14, padx=10, pady=10)
+        self.both.grid(row=1, column=10, padx=10, pady=10)
 
         self.ShowMaskFile = tk.Button(self.bottom_frame, text="Show_MSk_File")
-        self.ShowMaskFile.grid(row=1, column=15, padx=10, pady=10)
+        self.ShowMaskFile.grid(row=1, column=12, padx=10, pady=10)
         self.ShowMaskFile.bind("<ButtonPress-1>", self.show_msk_file)
         self.ShowMaskFile.bind("<ButtonRelease-1>", self.close_msk_file)
-
+        
         self.show_mask_var = tk.IntVar(value=False)
-        self.mask_checkbox = tk.Checkbutton(self.bottom_frame, text="PNG Also?", variable=self.show_mask_var)
-        self.mask_checkbox.grid(row=1, column=11, padx=10, pady=10)
+        self.mask_checkbox = tk.Checkbutton(self.bottom_frame, text="Save MSK", variable=self.show_mask_var)
+        self.mask_checkbox.grid(row=1, column=9, padx=10, pady=10)
 
         self.zoomin = tk.Button(self.bottom_frame, text="Zoom_in", command=self.zoomInPressed)
-        self.zoomin.grid(row=2, column=15, padx=10, pady=10)
+        self.zoomin.grid(row=2, column=10,padx=0,pady=0)
 
         self.zoomout = tk.Button(self.bottom_frame, text="Zoom_out", command=self.zoomOutPressed)
-        self.zoomout.grid(row=2, column=16, padx=10, pady=10)
+        self.zoomout.grid(row=2, column=11,padx=0,pady=0)
         
         self.toggle_mode_btn = tk.Button(self.bottom_frame, text="🖐️Palm Mode", command=self.toggle_mode)
-        self.toggle_mode_btn.grid(row=0, column=16, padx=10, pady=5)
-        self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
+        self.toggle_mode_btn.grid(row=1, column=13, padx=10, pady=5)
+    
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
-        #self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
 
+        self.root.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-1 * int(e.delta / 120), "units"))
+        self.root.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))  # Linux scroll up
+        self.root.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))   # Linux scroll down
+        self.root.bind("<Delete>", lambda event: self.undoPressed())
+        
         self.root.mainloop()
-
     # ----------------- UI callbacks -----------------
     def browsePressed(self):
         file_path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt")], title="Select a .txt file")
         if file_path:
             self.Load1.delete(0, tk.END)
             self.Load1.insert(0, file_path)
+        path = self.Load1.get().strip()
+        if not path.endswith(".txt"):
+            messagebox.showerror("Invalid", "Select only .txt file")
+            return
+        try:
+            self.ImagePath.clear()
+            with open(path, "r") as f:
+                lines = f.read().splitlines()
+                for line in lines:
+                    stripped = line.strip().strip('"')
+                    if stripped.lower().endswith(('.jpg','.png','.jpeg','.cargoimage','.img')) and os.path.exists(stripped):
+                        self.ImagePath.append(stripped)
+            if self.ImagePath:
+                self.CurrentIndex = 0
+                self.showImagePaths()
+            else:
+                messagebox.showerror("Empty File", "No valid image paths found")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load file:\n{e}")
     def toggle_mode(self):
         if self.mode == "label":
             self.mode = "pan"
             self.canvas.config(cursor="hand2")
             self.toggle_mode_btn.config(text="➡️ Label Mode")
 
-        # ❌ Disable labeling bindings
             self.canvas.unbind("<Button-1>")
             self.canvas.unbind("<Button-3>")
             self.root.unbind("<Delete>")
 
-        # ✅ Enable pan drag
             self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
             self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
-            #self.canvas.bind("<ButtonRelease-1>", self.on_mouse_up)
-
+        
         else:
             self.mode = "label"
             self.canvas.config(cursor="arrow")
             self.toggle_mode_btn.config(text="🖐️ Pan Mode")
-
-        # ✅ Re-enable labeling bindings
             self.labellingPressed()
+            
+    def adjust_brightness(self, delta):
+        new_val = round(self.brightness_var.get() + delta, 1)
+        self.brightness_var.set(new_val)
+        self.update_image()
 
+    def adjust_contrast(self, delta):
+        new_val = round(self.contrast_var.get() + delta, 1)
+        self.contrast_var.set(new_val)
+        self.update_image()
+        
     def on_mouse_down(self, event):
         if self.mode == "pan":
             self.drag_start_x = event.x
@@ -209,7 +240,7 @@ class Load_file:
             self.redraw_canvas()
 
     def on_mouse_drag(self, event):
-        if self.mode == "pan":
+        if self.mode == "pan" and self.zoom_scale > self.fit_zoom_scale:
             dx = event.x - self.drag_start_x
             dy = event.y - self.drag_start_y
             self.img_x += dx
@@ -217,42 +248,112 @@ class Load_file:
             self.drag_start_x = event.x
             self.drag_start_y = event.y
             self.redraw_canvas()
+    def OpenCargoImage(self,name):
+        with open(name, 'rb') as f:
+            d1 = f.read(8)
+            d2 = f.read(4)
+            d2a = f.read(1)
+            ign = struct.unpack('<B',d2a)
+            d2b = f.read(3)
+            d3 = f.read(4)
+            bpp = struct.unpack('<I',d3)
+            d4 = f.read(8)
+            size = struct.unpack('<II',d4)
+            height = size[0]
+            width = size[1]
+            d5 = f.read(8)
+            size = struct.unpack('<II',d5)
+            format1 = size[0]
+            flag = size[1]
+            if ign == 24:
+                d6 = f.read(4)
+                size = struct.unpack('<I',d6)
+                Yoff = size[0]
 
-    def clearPressed(self):
-        self.Load1.delete(0, tk.END)
-        self.NumberShowing.delete(0, tk.END)
-        self.InsidePath.delete(0, tk.END)
-        self.canvas.delete("all")
-        self.coord_label.config(text="X: 0, Y: 0")
-        # Reset state
-        self.ImagePath.clear()
-        self.CurrentIndex = 0
-        self.orig_img = None
-        self.img = None
-        self.temp_shapes.clear()
-        self.polygon_id.clear()
+            d7=f.read(8)
 
-    def loadPressed(self):
-        path = self.Load1.get().strip()
-        if not path.endswith(".txt"):
-            messagebox.showerror("Invalid", "Select only .txt file")
-            return
-        try:
-            self.ImagePath.clear()
-            with open(path, "r") as f:
-                lines = f.read().splitlines()
-                for line in lines:
-                    stripped = line.strip().strip('"')
-                    if stripped.lower().endswith(('.jpg','.png','.jpeg')) and os.path.exists(stripped):
-                        self.ImagePath.append(stripped)
-            if self.ImagePath:
-                self.CurrentIndex = 0
-                self.showImagePaths()
+        #print("height =",height,"Width =",width)
+        #print("Format =",format,"Flag =",flag)
+
+            if format1 > 2: 
+
+                bytes = f.read(width*height*2*2)
+                data = np.frombuffer(bytes, dtype=np.uint16).copy()
+
+                high = np.zeros(int(data.shape[0]/2))
+                low = np.zeros(int(data.shape[0]/2))
+
+                for i in range(int(data.shape[0]/2)):
+                    high[i]=data[2*i+1]
+                    low[i]=data[2*i]
+
+                high = high.reshape([width,height])
+                low = low.reshape([width,height])
+                high=high.transpose()
+                low=low.transpose()
+
             else:
-                messagebox.showerror("Empty File", "No valid image paths found")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load file:\n{e}")
 
+                bytes = f.read(width*height*2)
+                data = np.frombuffer(bytes, dtype=np.uint16).copy()
+
+                high = np.zeros(int(data.shape[0]))
+                low = 0
+
+                for i in range(int(data.shape[0])):
+                    high[i]=data[i]
+
+                high = high.reshape([width,height])
+                high=high.transpose()
+        return high, low
+    def OpenIMGimage(self,name):
+        with open(name, 'rb') as f:
+            header = f.read(2)
+            h1 = struct.unpack('<h',header)
+            skip = f.read(2)
+            s1 = struct.unpack('<h',skip)
+            s2 = s1[0]
+            skip1 = f.read(2)
+            h3 = struct.unpack('<h',skip1)
+            height3 = h3[0]
+            skip1 = f.read(2)
+            w1 = struct.unpack('<h',skip1)
+            width = w1[0]
+            skip1 = f.read(2)
+            xPos = struct.unpack('<h',skip1)
+            flag = xPos[0]
+            skip1 = f.read(2)
+            yPos = struct.unpack('<h',skip1)
+            skip1 = f.read(2)
+            flag2 = struct.unpack('<h',skip1)
+
+            for i in range(25):
+                skip1 = f.read(2)
+
+            for i in range(s2):
+                skip2 = f.read(1)
+            
+            height = int(height3/3)
+
+            bytes = f.read(width * height3 * 2)
+            data = np.frombuffer(bytes, dtype=np.uint16).copy()
+
+            data = data.reshape([width,height3])
+
+            high = np.zeros([height,width])
+            low = np.zeros([height,width])
+            Zimage = np.zeros([height,width])
+
+            high = data[:, :height].T
+            low = data[:, height:2*height].T
+            Zimage = data[:, 2*height:3*height].T
+
+
+            high = np.flipud(high)
+            low = np.flipud(low)
+            Zimage = np.flipud(Zimage)
+
+        return high, low
     def showImagePaths(self):
         path = self.ImagePath[self.CurrentIndex]
         self.NumberShowing.delete(0, tk.END)
@@ -264,12 +365,26 @@ class Load_file:
         try:
             if not os.path.exists(path):
                 raise FileNotFoundError(f"File not found: {path}")
+            ext = os.path.splitext(path)[1].lower()
 
-            # Read image with OpenCV (handles 16-bit images)
-            img_cv = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-            if img_cv is None:
-                raise ValueError("Failed to load image.")
-
+        # Load image based on extension
+            if ext == '.cargoimage':
+                high, _ = self.OpenCargoImage(path)
+                p1, p99 = np.percentile(high, (1, 99))
+                if p99 - p1 < 10:
+                    p1, p99 = high.min(), high.max()
+                img_cv = np.clip((high - p1) * 255.0 / max((p99 - p1), 1), 0, 255).astype(np.uint8)
+            elif ext == '.img':
+                high, _ = self.OpenIMGimage(path)
+                p1, p99 = np.percentile(high, (1, 99))
+                if p99 == p1:
+                    p1, p99 = high.min(), high.max()
+                img_cv = np.clip((high - p1) * 255.0 / max((p99 - p1), 1), 0, 255).astype(np.uint8)
+                
+            else:
+                img_cv = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+                if img_cv is None:
+                    raise ValueError("Failed to load image.")
             # convert to displayable RGB 8-bit
             if len(img_cv.shape) == 2:  # grayscale (maybe 16-bit)
                 p1, p99 = np.percentile(img_cv, (1, 99))
@@ -291,6 +406,7 @@ class Load_file:
                 self.zoom_scale = min(max_w / orig_width, max_h / orig_height)
             else:
                 self.zoom_scale = 1.0
+                self.zoom_at
                 
             self.fit_zoom_scale = self.zoom_scale  # store the minimum allowed zoom
 
@@ -308,26 +424,19 @@ class Load_file:
             self.img_x = max((canvas_w - disp_w) // 2, 0)
             self.img_y = max((canvas_h - disp_h) // 2, 0)
 
+            # Place image
             self.canvas.create_image(self.img_x, self.img_y, image=self.img_tk, anchor=tk.NW, tags="base_image")
 
-            self.canvas.config(scrollregion=(0, 0, disp_w, disp_h))
-            self.canvas.config(scrollregion=(0, 0, disp_w + self.img_x, disp_h + self.img_y))
+            self.canvas.update_idletasks()  
+            self.canvas.config(scrollregion=self.canvas.bbox("all"))
 
-
-            # load mask preview PNG if present (optional)
             mask_png_path = os.path.splitext(path)[0] + "_mask.png"
             if os.path.exists(mask_png_path):
                 mask_img = Image.open(mask_png_path).convert("L")
                 mask_resized = mask_img.resize((disp_w, disp_h), Image.Resampling.NEAREST)
                 self.mask_tk = ImageTk.PhotoImage(mask_resized)
-                # store but don't show by default
-                # (when Show_MSk_File pressed, it will show the binary msk overlay)
-                # optionally we could display here if user preference set
-
-            # bind motion to show pixel value
+                
             self.canvas.bind("<Motion>", self.show_pixel)
-
-            # reset temporary shapes / points
             self.points.clear()
             self.temp_line_ids.clear()
             self.temp_point_ids.clear()
@@ -349,10 +458,7 @@ class Load_file:
                             # store as floats in original image coords
                             pts_float = [(float(p[0]), float(p[1])) for p in points]
                             self.temp_shapes.append(pts_float)
-
-            # redraw overlay polygons
-            self.redraw_canvas()
-
+            self.redraw_canvas()   
         except Exception as e:
             messagebox.showerror("Error", f"Cannot open image:\n{e}")
 
@@ -374,64 +480,79 @@ class Load_file:
         else:
         # Outside image bounds — reset to 0,0,0
             self.coord_label.config(text="(0,0) Value=(0, 0, 0)")
+    def confirm_save_before_switch(self, direction):
+        if self.shapes_modified:
+            result = messagebox.askquestion("Save Polygon?", "Do you want to save the polygon drawn?", icon='warning')
+            if result == 'yes':
+                self.savePressed(force=True)
+            else:
+                self.new_shapes.clear()
+                self.shapes_modified = False
 
-
-    def nextPressed(self):
-        if self.ImagePath:
+        if direction == "next":
             self.CurrentIndex += 1
             if self.CurrentIndex >= len(self.ImagePath):
                 self.CurrentIndex = 0
-            self.showImagePaths()
-
-    def previousPressed(self):
-        if self.ImagePath:
+        elif direction == "prev":
             self.CurrentIndex -= 1
             if self.CurrentIndex < 0:
                 self.CurrentIndex = len(self.ImagePath) - 1
-            self.showImagePaths()
+        self.showImagePaths()
 
-    def undoPressed(self):
+    def nextPressed(self):
+        if self.ImagePath:
+            self.confirm_save_before_switch("next")
+
+    def previousPressed(self):
+        if self.ImagePath: 
+            self.confirm_save_before_switch("prev")
+
+    def undoPressed(self, event=None):
         if self.points:
             self.points.pop()
             self.redraw_canvas()
         else:
-            messagebox.showinfo("Undo", "No points are There to Undo Here")
-    def fitWindowPressed(self):
-        if self.orig_img is None:
+            messagebox.showinfo("Undo", "No  points to undo.")
             return
-
-        orig_width, orig_height = self.orig_img.size
-        max_w, max_h = 1525, 600  # same as your initial preview logic
-
-        if orig_width > max_w or orig_height > max_h:
-            self.zoom_scale = min(max_w / orig_width, max_h / orig_height)
-        else:
-            self.zoom_scale = 1.0
-
-        self.offset_x = 0
-        self.offset_y = 0
-
-        disp_w = int(orig_width * self.zoom_scale)
-        disp_h = int(orig_height * self.zoom_scale)
-
+        
+    def fitWindowPressed(self):
+        if not self.orig_img:
+            return
+    # Get canvas size
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
 
-        self.img_x = max((canvas_w - disp_w) // 2, 0)
-        self.img_y = max((canvas_h - disp_h) // 2, 0)
+    # Get original image size
+        img_w, img_h = self.orig_img.size
 
-        self.canvas.config(scrollregion=(0, 0, disp_w + self.img_x, disp_h + self.img_y))
+    # Compute scale to fit image within canvas
+        scale_w = canvas_w / img_w
+        scale_h = canvas_h / img_h
+        fit_scale = min(scale_w, scale_h)
+
+    # Apply zoom scale
+        self.zoom_scale = fit_scale
+
+    # Compute new image size
+        new_w = int(img_w * self.zoom_scale)
+        new_h = int(img_h * self.zoom_scale)
+
+    # Center the image
+        self.img_x = max(0, (canvas_w - new_w) // 2)
+        self.img_y = max(0, (canvas_h - new_h) // 2)
+
+    # Redraw everything
         self.redraw_canvas()
 
-        
-        
+
+        self.canvas.config(scrollregion=self.canvas.bbox("all"))
+
     def _on_mouse_wheel(self, event):
-    # Determine zoom factor based on platform
-        if hasattr(event, 'delta') and event.delta:
-        # Windows/macOS: delta is ±120 per notch
+
+        if hasattr(event, 'delta') and event.delta:        
             factor = 1.2 if event.delta > 0 else 1.0 / 1.2
         elif hasattr(event, 'num'):
-        # Linux: Button-4 = scroll up, Button-5 = scroll down
+
             if event.num == 4:
                 factor = 1.2
             elif event.num == 5:
@@ -440,20 +561,44 @@ class Load_file:
                 return
         else:
             return
-    # Convert mouse position to canvas coordinates
         canvas_x = self.canvas.canvasx(event.x)
         canvas_y = self.canvas.canvasy(event.y)
 
-        # Trigger zoom centered at cursor
         self.zoom_at(factor, canvas_x, canvas_y)
 
     def enable_polygon_deletion(self):
-        def on_click(event):
-            # convert mouse to canvas coords
+        self.hover_highlight_id = None  # ID of the temporary highlight
+
+        def on_motion(event):
             cx = self.canvas.canvasx(event.x)
             cy = self.canvas.canvasy(event.y)
-            clicked_items = self.canvas.find_overlapping(cx, cy, cx, cy)
-            for item in reversed(clicked_items):
+            overlapping = self.canvas.find_overlapping(cx, cy, cx, cy)
+
+        # Remove previous highlight
+            if self.hover_highlight_id:
+                self.canvas.delete(self.hover_highlight_id)
+                self.hover_highlight_id = None
+
+            for item in reversed(overlapping):
+                if item in self.polygon_id:
+                    index = self.polygon_id.index(item)
+                    shape = self.temp_shapes[index]
+                    screen_pts = [
+                        (int(round(x * self.zoom_scale)) + self.img_x,
+                        int(round(y * self.zoom_scale)) + self.img_y)
+                        for (x, y) in shape
+                    ]
+                    flat = [coord for pt in screen_pts for coord in pt]
+                    self.hover_highlight_id = self.canvas.create_polygon(
+                        flat, fill="red", stipple="gray50", outline="", tags="hover_preview")
+                    break
+
+        def on_click(event):
+            cx = self.canvas.canvasx(event.x)
+            cy = self.canvas.canvasy(event.y)
+            overlapping = self.canvas.find_overlapping(cx, cy, cx, cy)
+
+            for item in reversed(overlapping):
                 if item in self.polygon_id:
                     index = self.polygon_id.index(item)
                     self.canvas.delete(item)
@@ -463,36 +608,39 @@ class Load_file:
                     self.update_msk_file()
                     self.redraw_canvas()
                     break
+        # Clean up
+            self.canvas.unbind("<Motion>")
             self.canvas.unbind("<Button-1>")
+            if self.hover_highlight_id:
+                self.canvas.delete(self.hover_highlight_id)
+                self.hover_highlight_id = None
 
+        self.canvas.bind("<Motion>", on_motion)
         self.canvas.bind("<Button-1>", on_click)
 
     def update_msk_file(self):
-        # Update binary .msk using current temp_shapes (in original image coords)
+        
         if not self.ImagePath:
             return
         image_path = self.ImagePath[self.CurrentIndex]
         msk_path = os.path.splitext(image_path)[0] + "_label.msk"
         orig_w, orig_h = self.orig_img.size
-        # mask array shape (height, width)
-        mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
+        mask = np.zeros((orig_w, orig_h), dtype=np.uint8)
         for shape in self.temp_shapes:
-            pts = np.array([[int(round(x)), int(round(y))] for x, y in shape], dtype=np.int32)
+            pts = np.array([[int(round(y)), int(round(x))] for x, y in shape], dtype=np.int32)
             if pts.size == 0:
                 continue
             cv2.fillPoly(mask, [pts], 255)
-
-        # write header: height, width
         with open(msk_path, "wb") as f:
             f.write(struct.pack('II', orig_h, orig_w))
             f.write(mask.tobytes())
 
-        # optionally save PNG preview
         if self.show_mask_var.get():
             try:
                 png_path = os.path.splitext(image_path)[0] + "_mask.png"
-                img = Image.fromarray(mask)  # L mode
+                img = Image.fromarray(mask.T)  # L mode
                 img.save(png_path)
+                
             except Exception as e:
                 print("Failed to save PNG:", e)
 
@@ -500,7 +648,10 @@ class Load_file:
         self.enable_polygon_deletion()
         
     def render_overlays(self):
-        # Draw polygons
+        self.canvas.delete("polygon")
+        self.canvas.delete("temp_point")
+        self.canvas.delete("temp_line")
+
         self.polygon_id.clear()
         for shape in self.temp_shapes:
             screen_pts = [
@@ -509,20 +660,20 @@ class Load_file:
                 for (x, y) in shape
             ]
             flat = [coord for pt in screen_pts for coord in pt]
-            polygon_id = self.canvas.create_polygon(flat, outline="red", fill='', width=2)
+            polygon_id = self.canvas.create_polygon(flat, outline="red", fill='', width=2, tags="polygon")
             self.polygon_id.append(polygon_id)
 
         # Draw current points and lines
         for i, point in enumerate(self.points):
             sx = int(round(point[0] * self.zoom_scale)) + self.img_x
             sy = int(round(point[1] * self.zoom_scale)) + self.img_y
-            self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red")
+            self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red", tags="temp_point")
+
             if i > 0:
                 prev = self.points[i-1]
                 px = int(round(prev[0] * self.zoom_scale)) + self.img_x
                 py = int(round(prev[1] * self.zoom_scale)) + self.img_y
-                self.canvas.create_line(px, py, sx, sy, fill="red", width=2)
-
+                self.canvas.create_line(px, py, sx, sy, fill="red", width=2, tags="temp_line")
     # Mask overlay
         if self.mask_visible and self.mask_data is not None:
             h, w = self.mask_data.shape
@@ -533,6 +684,7 @@ class Load_file:
             if self.mask_overlay_id is not None:
                 self.canvas.delete(self.mask_overlay_id)
             self.mask_overlay_id = self.canvas.create_image(self.img_x, self.img_y, anchor=tk.NW, image=self.tk_mask_overlay)
+            
     def render_image(self):
         if self.orig_img is None:
             return
@@ -555,11 +707,13 @@ class Load_file:
 
         self.canvas.delete("base_image")
         self.canvas.create_image(self.img_x, self.img_y, image=self.img_tk, anchor=tk.NW, tags="base_image")
+        self.canvas.delete("Prev")
         
     def redraw_canvas(self):
         self.render_image()
         self.render_overlays()
-        
+        self.canvas.config(scrollregion=self.canvas.bbox("all"))
+
     def save_annotated_image(self, image_path, shapes):
         annotated_img = self.orig_img.copy()
         draw = ImageDraw.Draw(annotated_img)
@@ -571,9 +725,9 @@ class Load_file:
     def save_msk_file(self, image_path, shapes):
         # Save binary .msk and optional png
         orig_w, orig_h = self.orig_img.size
-        mask = np.zeros((orig_h, orig_w), dtype=np.uint8)
+        mask = np.zeros((orig_w, orig_h), dtype=np.uint8)
         for shape in shapes:
-            pts = np.array([[int(round(x)), int(round(y))] for x, y in shape], dtype=np.int32)
+            pts = np.array([[int(round(y)), int(round(x))] for x, y in shape], dtype=np.int32)
             if pts.size == 0:
                 continue
             cv2.fillPoly(mask, [pts], 255)
@@ -588,7 +742,7 @@ class Load_file:
         if self.show_mask_var.get():
             try:
                 png_path = os.path.splitext(image_path)[0] + "_mask.png"
-                img = Image.fromarray(mask)  # L
+                img = Image.fromarray(mask.T)  # L
                 img.save(png_path)
                 print("PNG saved:", png_path)
             except Exception as e:
@@ -605,7 +759,6 @@ class Load_file:
         self.canvas.bind_all("<Button-4>", self._on_mouse_wheel)
         self.canvas.bind_all("<Button-5>", self._on_mouse_wheel)
 
-
     def view_msk_file(self, msk_path):
         if not os.path.exists(msk_path):
             messagebox.showerror("Missing", f"File not found:\n{msk_path}")
@@ -614,7 +767,7 @@ class Load_file:
             header = f.read(8)
             h, w = struct.unpack('II', header)
             data = f.read()
-            mask = np.frombuffer(data, dtype=np.uint8).reshape((h, w))
+            mask = np.frombuffer(data, dtype=np.uint8).reshape((w,h))
         cv2.imshow("Mask File", mask)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -625,7 +778,7 @@ class Load_file:
         center_x = canvas_w // 2
         center_y = canvas_h // 2
         self.zoom_at(1.2, center_x, center_y)
-
+        
     def zoomOutPressed(self):
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
@@ -636,7 +789,6 @@ class Load_file:
     def zoom_at(self, factor, screen_x, screen_y):
         if self.orig_img is None:
             return
-
         old_zoom = self.zoom_scale
         new_zoom = old_zoom * factor
         min_allowed_zoom = max(self.fit_zoom_scale, self.min_zoom)
@@ -644,30 +796,24 @@ class Load_file:
 
         if abs(new_zoom - old_zoom) < 1e-4:
             return
-
-    # Compute image-space coordinates under old zoom
         img_x = (screen_x - self.img_x) / old_zoom
         img_y = (screen_y - self.img_y) / old_zoom
-
-    # Update zoom
         self.zoom_scale = new_zoom
-
-    # Compute new image size
         disp_w = int(self.orig_img.size[0] * self.zoom_scale)
         disp_h = int(self.orig_img.size[1] * self.zoom_scale)
 
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
 
-    # Recenter image so that (img_x, img_y) stays under cursor
         self.img_x = int(screen_x - img_x * self.zoom_scale)
         self.img_y = int(screen_y - img_y * self.zoom_scale)
 
-    # Clamp to keep image within canvas bounds (optional)
         self.img_x = max(min(self.img_x, canvas_w - 10), -disp_w + 10)
         self.img_y = max(min(self.img_y, canvas_h - 10), -disp_h + 10)
 
         self.redraw_canvas()
+        self.canvas.config(scrollregion=self.canvas.bbox("all"))
+
     # ----------------- Mask overlay / show/hide -----------------
     def show_msk_file(self, event=None):
         if not self.ImagePath:
@@ -690,16 +836,16 @@ class Load_file:
             header = f.read(8)
             h, w = struct.unpack('II', header)
             data = f.read()
-            mask = np.frombuffer(data, dtype=np.uint8).reshape((h, w))
+            mask = np.frombuffer(data, dtype=np.uint8).reshape((w, h))
 
         self.mask_data = mask
         self.mask_visible = True
-        # create overlay at top-left (0,0) scaled to display size
+    
         orig_w, orig_h = self.orig_img.size
         disp_w = int(orig_w * self.zoom_scale)
         disp_h = int(orig_h * self.zoom_scale)
         visible_mask = np.where(mask > 0, 255, 0).astype(np.uint8)
-        mask_img = Image.fromarray(visible_mask).convert("L")
+        mask_img = Image.fromarray(visible_mask.T).convert("L")
         mask_img = mask_img.resize((disp_w, disp_h), Image.Resampling.NEAREST)
         self.tk_mask_overlay = ImageTk.PhotoImage(mask_img)
         # anchor NW at image top-left
@@ -739,6 +885,8 @@ class Load_file:
 
     # ----------------- Labeling -----------------
     def labellingPressed(self):
+        if self.mode != "label":
+            return
         def on_left_click(event):
             canvas_x = self.canvas.canvasx(event.x)
             canvas_y = self.canvas.canvasy(event.y)
@@ -748,49 +896,48 @@ class Load_file:
             img_y = (canvas_y - self.img_y) / self.zoom_scale
 
             orig_w, orig_h = self.orig_img.size
-            img_x = min(max(img_x, 0), orig_w - 1)
-            img_y = min(max(img_y, 0), orig_h - 1)
-
+            if not (0 <= img_x < orig_w and 0 <= img_y < orig_h):
+                return  
             self.points.append((img_x, img_y))
-
             sx = int(round(img_x * self.zoom_scale)) + self.img_x
             sy = int(round(img_y * self.zoom_scale)) + self.img_y
-            point_id = self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red")
+            point_id = self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red",tags="temp_point")
             self.temp_point_ids.append(point_id)
 
             if len(self.points) > 1:
                 prev = self.points[-2]
                 px = int(round(prev[0] * self.zoom_scale)) + self.img_x
                 py = int(round(prev[1] * self.zoom_scale)) + self.img_y
-                line_id = self.canvas.create_line(px, py, sx, sy, fill="red", width=2)
+                line_id = self.canvas.create_line(px, py, sx, sy, fill="red", width=2,tags="temp_line")
                 self.temp_line_ids.append(line_id)
 
         def on_right_click(event):
-            self.shapes_modified = True
             if len(self.points) > 2:
-                pts = [
-                    (int(round(x * self.zoom_scale)) + self.img_x,
-                    int(round(y * self.zoom_scale)) + self.img_y)
-                    for x, y in self.points
-                ]
-                polygon_id = self.canvas.create_polygon([coord for p in pts for coord in p], outline="red", fill='', width=2)
-                self.polygon_id.append(polygon_id)
                 self.temp_shapes.append([(float(x), float(y)) for x, y in self.points])
                 self.new_shapes.append(list(self.points))
+                self.shapes_modified = True
+                self.redraw_canvas()
+            else:
+                messagebox.showinfo("Polygon Error", "Need at least 3 points to form a polygon.")
+                return
 
+    # Clear temp visuals
             for line_id in self.temp_line_ids:
                 self.canvas.delete(line_id)
             self.temp_line_ids.clear()
+
             for point_id in self.temp_point_ids:
                 self.canvas.delete(point_id)
             self.temp_point_ids.clear()
+
             self.points.clear()
+
 
         self.canvas.bind("<Button-1>", on_left_click)
         self.canvas.bind("<Button-3>", on_right_click)
-        self.root.bind("<Delete>", lambda event: self.undoPressed())
-        self.canvas.focus_set()
     
+        self.canvas.focus_set()
+
     def update_image(self,value=None):     
         if self.orig_img is None:
             return
@@ -813,7 +960,13 @@ class Load_file:
 
         self.canvas.delete("base_image")
         self.canvas.create_image(self.img_x, self.img_y, image=self.img_tk, anchor=tk.NW, tags="base_image")
-        self.redraw_canvas()
+        self.render_overlays()
+        
+    def reset_brightness_contrast(self):
+        self.brightness_var.set(1.0)
+        self.contrast_var.set(1.0)
+        self.update_image()
+
     # ----------------- Save -----------------
     def savePressed(self, force=False):
         if not self.shapes_modified and not force:
