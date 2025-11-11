@@ -7,7 +7,32 @@ import struct
 import numpy as np
 import cv2
 import scipy.ndimage
+import threading
+from collections import OrderedDict
 
+# ----------------- Small LRU cache for decoded PIL images -----------------
+class ImageLRU:
+    def __init__(self, capacity=8):
+        self.capacity = capacity
+        self._cache = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return None
+
+    def put(self, key, value):
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = value
+            if len(self._cache) > self.capacity:
+                self._cache.popitem(last=False)
+
+# ----------------- App -----------------
 class Load_file:
     def __init__(self):
         self.root = tk.Tk()
@@ -25,7 +50,7 @@ class Load_file:
         self.shapes_modified = False
         self.temp_line_ids = []
         self.temp_point_ids = []
-        self.orig_img = None      # PIL original image (unscaled)
+        self.orig_img = None      # PIL original image (unscaled, 8-bit RGB)
         self.img = None           # current displayed (scaled) PIL image
         self.img_tk = None
         self.mask_data = None
@@ -43,7 +68,10 @@ class Load_file:
         self.min_zoom = 0.1
         self.max_zoom = 8.0
 
-        # Build UI (kept same layout as your original)
+        # Cache for decoded, 8-bit RGB PIL images
+        self.cache = ImageLRU(capacity=10)
+
+        # Build UI
         self.top_frame = tk.Frame(self.root, bg="white")
         self.top_frame.pack(fill="both", expand=True)
 
@@ -71,7 +99,7 @@ class Load_file:
     
         self.enable_click_to_zoom()
 
-        # Bottom controls (kept your layout)
+        # Bottom controls
         self.Listfile = tk.Label(self.bottom_frame, text="List File:")
         self.Listfile.grid(row=0, column=0, padx=0, pady=0)
 
@@ -166,6 +194,7 @@ class Load_file:
         self.root.bind("<Delete>", lambda event: self.undoPressed())
         
         self.root.mainloop()
+
     # ----------------- UI callbacks -----------------
     def browsePressed(self):
         file_path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt")], title="Select a .txt file")
@@ -191,6 +220,7 @@ class Load_file:
                 messagebox.showerror("Empty File", "No valid image paths found")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load file:\n{e}")
+
     def toggle_mode(self):
         if self.mode == "label":
             self.mode = "pan"
@@ -203,7 +233,6 @@ class Load_file:
 
             self.canvas.bind("<ButtonPress-1>", self.on_mouse_down)
             self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
-        
         else:
             self.mode = "label"
             self.canvas.config(cursor="arrow")
@@ -226,7 +255,6 @@ class Load_file:
             self.drag_start_y = event.y
             return
         if self.mode == "label":
-        # Place a point manually for polygon labeling
             canvas_x = self.canvas.canvasx(event.x)
             canvas_y = self.canvas.canvasy(event.y)
             img_x = (canvas_x - self.img_x) / self.zoom_scale
@@ -248,112 +276,132 @@ class Load_file:
             self.drag_start_x = event.x
             self.drag_start_y = event.y
             self.redraw_canvas()
-    def OpenCargoImage(self,name):
+
+    # ----------------- FAST decoders -----------------
+    def OpenCargoImage(self, name):
+        # Vectorized reader based on your original format logic.
         with open(name, 'rb') as f:
-            d1 = f.read(8)
-            d2 = f.read(4)
-            d2a = f.read(1)
-            ign = struct.unpack('<B',d2a)
-            d2b = f.read(3)
-            d3 = f.read(4)
-            bpp = struct.unpack('<I',d3)
-            d4 = f.read(8)
-            size = struct.unpack('<II',d4)
-            height = size[0]
-            width = size[1]
-            d5 = f.read(8)
-            size = struct.unpack('<II',d5)
-            format1 = size[0]
-            flag = size[1]
+            f.read(8)   # d1
+            f.read(4)   # d2
+            ign = struct.unpack('<B', f.read(1))[0]
+            f.read(3)   # d2b
+            bpp = struct.unpack('<I', f.read(4))[0]
+            size = struct.unpack('<II', f.read(8))
+            height, width = size[0], size[1]
+            size2 = struct.unpack('<II', f.read(8))
+            format1, flag = size2[0], size2[1]
             if ign == 24:
-                d6 = f.read(4)
-                size = struct.unpack('<I',d6)
-                Yoff = size[0]
+                # Y offset (unused here)
+                _ = struct.unpack('<I', f.read(4))[0]
+            f.read(8)  # d7
 
-            d7=f.read(8)
-
-        #print("height =",height,"Width =",width)
-        #print("Format =",format,"Flag =",flag)
-
-            if format1 > 2: 
-
-                bytes = f.read(width*height*2*2)
-                data = np.frombuffer(bytes, dtype=np.uint16).copy()
-
-                high = np.zeros(int(data.shape[0]/2))
-                low = np.zeros(int(data.shape[0]/2))
-
-                for i in range(int(data.shape[0]/2)):
-                    high[i]=data[2*i+1]
-                    low[i]=data[2*i]
-
-                high = high.reshape([width,height])
-                low = low.reshape([width,height])
-                high=high.transpose()
-                low=low.transpose()
-
+            if format1 > 2:
+                # Interleaved hi/low words
+                count = width * height * 2  # two planes interleaved
+                data = np.frombuffer(f.read(count * 2), dtype='<u2', count=count)
+                # even -> low, odd -> high
+                high = data[1::2].reshape((width, height)).T
+                low  = data[0::2].reshape((width, height)).T
             else:
-
-                bytes = f.read(width*height*2)
-                data = np.frombuffer(bytes, dtype=np.uint16).copy()
-
-                high = np.zeros(int(data.shape[0]))
+                count = width * height
+                data = np.frombuffer(f.read(count * 2), dtype='<u2', count=count)
+                high = data.reshape((width, height)).T
                 low = 0
 
-                for i in range(int(data.shape[0])):
-                    high[i]=data[i]
-
-                high = high.reshape([width,height])
-                high=high.transpose()
         return high, low
-    def OpenIMGimage(self,name):
+
+    def OpenIMGimage(self, name):
+        # Vectorized .img reader (your original logic without Python loops)
         with open(name, 'rb') as f:
-            header = f.read(2)
-            h1 = struct.unpack('<h',header)
-            skip = f.read(2)
-            s1 = struct.unpack('<h',skip)
-            s2 = s1[0]
-            skip1 = f.read(2)
-            h3 = struct.unpack('<h',skip1)
-            height3 = h3[0]
-            skip1 = f.read(2)
-            w1 = struct.unpack('<h',skip1)
-            width = w1[0]
-            skip1 = f.read(2)
-            xPos = struct.unpack('<h',skip1)
-            flag = xPos[0]
-            skip1 = f.read(2)
-            yPos = struct.unpack('<h',skip1)
-            skip1 = f.read(2)
-            flag2 = struct.unpack('<h',skip1)
+            h1 = struct.unpack('<h', f.read(2))[0]
+            s2  = struct.unpack('<h', f.read(2))[0]
+            _ = struct.unpack('<h', f.read(2))[0]   # h3 skip?
+            height3 = struct.unpack('<h', f.read(2))[0]
+            width = struct.unpack('<h', f.read(2))[0]
+            flag = struct.unpack('<h', f.read(2))[0]
+            yPos = struct.unpack('<h', f.read(2))[0]
+            flag2 = struct.unpack('<h', f.read(2))[0]
 
-            for i in range(25):
-                skip1 = f.read(2)
+            f.read(2*25)  # skip 25 x 2 bytes
 
-            for i in range(s2):
-                skip2 = f.read(1)
-            
-            height = int(height3/3)
+            f.read(s2)    # skip s2 bytes
 
-            bytes = f.read(width * height3 * 2)
-            data = np.frombuffer(bytes, dtype=np.uint16).copy()
+            height = int(height3 / 3)
 
-            data = data.reshape([width,height3])
-
-            high = np.zeros([height,width])
-            low = np.zeros([height,width])
-            Zimage = np.zeros([height,width])
+            data = np.frombuffer(f.read(width * height3 * 2), dtype='<u2', count=width*height3)
+            data = data.reshape((width, height3))
 
             high = data[:, :height].T
-            low = data[:, height:2*height].T
+            low  = data[:, height:2*height].T
             Zimage = data[:, 2*height:3*height].T
 
-
+            # Flip as original code
             high = np.flipud(high)
-            low = np.flipud(low)
+            low  = np.flipud(low)
             Zimage = np.flipud(Zimage)
 
         return high, low
+
+    # Unified, cached loader returning 8-bit RGB PIL Image
+    def load_image(self, path):
+        cached = self.cache.get(path)
+        if cached is not None:
+            return cached
+
+        ext = os.path.splitext(path)[1].lower()
+
+        if ext == '.cargoimage':
+            high, _ = self.OpenCargoImage(path)
+            p1, p99 = np.percentile(high, (1, 99))
+            if p99 - p1 < 10:
+                p1, p99 = float(high.min()), float(high.max())
+            img8 = np.clip((high - p1) * 255.0 / max((p99 - p1), 1), 0, 255).astype(np.uint8)
+            pil_img = Image.fromarray(img8, mode='L').convert('RGB')
+        elif ext == '.img':
+            high, _ = self.OpenIMGimage(path)
+            p1, p99 = np.percentile(high, (1, 99))
+            if p99 == p1:
+                p1, p99 = float(high.min()), float(high.max())
+            img8 = np.clip((high - p1) * 255.0 / max((p99 - p1), 1), 0, 255).astype(np.uint8)
+            pil_img = Image.fromarray(img8, mode='L').convert('RGB')
+        else:
+            img_cv = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+            if img_cv is None:
+                raise ValueError("Failed to load image.")
+            if img_cv.ndim == 2:
+                # grayscale (8/16-bit)
+                if img_cv.dtype == np.uint16:
+                    p1, p99 = np.percentile(img_cv, (1, 99))
+                    if p99 == p1:
+                        p1, p99 = float(img_cv.min()), float(img_cv.max())
+                    img8 = np.clip((img_cv - p1) * 255.0 / max((p99 - p1), 1), 0, 255).astype(np.uint8)
+                else:
+                    img8 = img_cv.astype(np.uint8)
+                pil_img = Image.fromarray(img8, mode='L').convert('RGB')
+            else:
+                if img_cv.dtype == np.uint16:
+                    img_cv = cv2.convertScaleAbs(img_cv, alpha=(255.0 / 65535.0))
+                pil_img = Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
+
+        self.cache.put(path, pil_img)
+        return pil_img
+
+    def prefetch_neighbors(self):
+        # Preload next/previous images in the background to make navigation smooth
+        if not self.ImagePath:
+            return
+        n = len(self.ImagePath)
+        idxs = [ (self.CurrentIndex + 1) % n, (self.CurrentIndex - 1) % n ]
+        def worker(paths):
+            for p in paths:
+                try:
+                    if self.cache.get(p) is None:
+                        _ = self.load_image(p)
+                except Exception:
+                    pass
+        threading.Thread(target=worker, args=( [self.ImagePath[i] for i in idxs], ), daemon=True).start()
+
+    # ----------------- Display -----------------
     def showImagePaths(self):
         path = self.ImagePath[self.CurrentIndex]
         self.NumberShowing.delete(0, tk.END)
@@ -365,38 +413,9 @@ class Load_file:
         try:
             if not os.path.exists(path):
                 raise FileNotFoundError(f"File not found: {path}")
-            ext = os.path.splitext(path)[1].lower()
 
-        # Load image based on extension
-            if ext == '.cargoimage':
-                high, _ = self.OpenCargoImage(path)
-                p1, p99 = np.percentile(high, (1, 99))
-                if p99 - p1 < 10:
-                    p1, p99 = high.min(), high.max()
-                img_cv = np.clip((high - p1) * 255.0 / max((p99 - p1), 1), 0, 255).astype(np.uint8)
-            elif ext == '.img':
-                high, _ = self.OpenIMGimage(path)
-                p1, p99 = np.percentile(high, (1, 99))
-                if p99 == p1:
-                    p1, p99 = high.min(), high.max()
-                img_cv = np.clip((high - p1) * 255.0 / max((p99 - p1), 1), 0, 255).astype(np.uint8)
-                
-            else:
-                img_cv = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-                if img_cv is None:
-                    raise ValueError("Failed to load image.")
-            # convert to displayable RGB 8-bit
-            if len(img_cv.shape) == 2:  # grayscale (maybe 16-bit)
-                p1, p99 = np.percentile(img_cv, (1, 99))
-                if p99 == p1:
-                    p1, p99 = img_cv.min(), img_cv.max()
-                img8 = np.clip((img_cv - p1) * 255.0 / max((p99 - p1), 1), 0, 255).astype(np.uint8)
-                img_rgb = cv2.cvtColor(img8, cv2.COLOR_GRAY2RGB)
-            else:
-                # If 16-bit 3-channel, convert to 8-bit; if already 8-bit, convertScaleAbs is safe
-                img_rgb = cv2.convertScaleAbs(img_cv, alpha=(255.0 / 65535.0) if img_cv.dtype == np.uint16 else 1.0)
-
-            pil_img = Image.fromarray(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB)) if img_rgb.ndim == 3 else Image.fromarray(img_rgb)
+            # Fast, cached unified loader (returns 8-bit RGB PIL)
+            pil_img = self.load_image(path)
             self.orig_img = pil_img
             orig_width, orig_height = pil_img.size
 
@@ -406,8 +425,7 @@ class Load_file:
                 self.zoom_scale = min(max_w / orig_width, max_h / orig_height)
             else:
                 self.zoom_scale = 1.0
-                self.zoom_at
-                
+
             self.fit_zoom_scale = self.zoom_scale  # store the minimum allowed zoom
 
             disp_w = int(orig_width * self.zoom_scale)
@@ -458,7 +476,11 @@ class Load_file:
                             # store as floats in original image coords
                             pts_float = [(float(p[0]), float(p[1])) for p in points]
                             self.temp_shapes.append(pts_float)
-            self.redraw_canvas()   
+
+            self.redraw_canvas()
+            # Kick off neighbor prefetch in background (non-blocking)
+            self.prefetch_neighbors()
+
         except Exception as e:
             messagebox.showerror("Error", f"Cannot open image:\n{e}")
 
@@ -469,7 +491,6 @@ class Load_file:
         canvas_x = self.canvas.canvasx(event.x)
         canvas_y = self.canvas.canvasy(event.y)
 
-    # Adjust for image offset
         img_x = int((canvas_x - self.img_x) / self.zoom_scale)
         img_y = int((canvas_y - self.img_y) / self.zoom_scale)
 
@@ -478,8 +499,8 @@ class Load_file:
             pixel = self.orig_img.getpixel((img_x, img_y))
             self.coord_label.config(text=f"({img_x},{img_y}) Value={pixel}")
         else:
-        # Outside image bounds — reset to 0,0,0
             self.coord_label.config(text="(0,0) Value=(0, 0, 0)")
+
     def confirm_save_before_switch(self, direction):
         if self.shapes_modified:
             result = messagebox.askquestion("Save Polygon?", "Do you want to save the polygon drawn?", icon='warning')
@@ -518,41 +539,30 @@ class Load_file:
     def fitWindowPressed(self):
         if not self.orig_img:
             return
-    # Get canvas size
+
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
-
-    # Get original image size
         img_w, img_h = self.orig_img.size
 
-    # Compute scale to fit image within canvas
         scale_w = canvas_w / img_w
         scale_h = canvas_h / img_h
         fit_scale = min(scale_w, scale_h)
 
-    # Apply zoom scale
         self.zoom_scale = fit_scale
 
-    # Compute new image size
         new_w = int(img_w * self.zoom_scale)
         new_h = int(img_h * self.zoom_scale)
 
-    # Center the image
         self.img_x = max(0, (canvas_w - new_w) // 2)
         self.img_y = max(0, (canvas_h - new_h) // 2)
 
-    # Redraw everything
         self.redraw_canvas()
-
-
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
 
     def _on_mouse_wheel(self, event):
-
         if hasattr(event, 'delta') and event.delta:        
             factor = 1.2 if event.delta > 0 else 1.0 / 1.2
         elif hasattr(event, 'num'):
-
             if event.num == 4:
                 factor = 1.2
             elif event.num == 5:
@@ -563,7 +573,6 @@ class Load_file:
             return
         canvas_x = self.canvas.canvasx(event.x)
         canvas_y = self.canvas.canvasy(event.y)
-
         self.zoom_at(factor, canvas_x, canvas_y)
 
     def enable_polygon_deletion(self):
@@ -574,7 +583,7 @@ class Load_file:
             cy = self.canvas.canvasy(event.y)
             overlapping = self.canvas.find_overlapping(cx, cy, cx, cy)
 
-        # Remove previous highlight
+            # Remove previous highlight
             if self.hover_highlight_id:
                 self.canvas.delete(self.hover_highlight_id)
                 self.hover_highlight_id = None
@@ -585,7 +594,7 @@ class Load_file:
                     shape = self.temp_shapes[index]
                     screen_pts = [
                         (int(round(x * self.zoom_scale)) + self.img_x,
-                        int(round(y * self.zoom_scale)) + self.img_y)
+                         int(round(y * self.zoom_scale)) + self.img_y)
                         for (x, y) in shape
                     ]
                     flat = [coord for pt in screen_pts for coord in pt]
@@ -608,7 +617,7 @@ class Load_file:
                     self.update_msk_file()
                     self.redraw_canvas()
                     break
-        # Clean up
+            # Clean up
             self.canvas.unbind("<Motion>")
             self.canvas.unbind("<Button-1>")
             if self.hover_highlight_id:
@@ -619,7 +628,6 @@ class Load_file:
         self.canvas.bind("<Button-1>", on_click)
 
     def update_msk_file(self):
-        
         if not self.ImagePath:
             return
         image_path = self.ImagePath[self.CurrentIndex]
@@ -640,7 +648,6 @@ class Load_file:
                 png_path = os.path.splitext(image_path)[0] + "_mask.png"
                 img = Image.fromarray(mask.T)  # L mode
                 img.save(png_path)
-                
             except Exception as e:
                 print("Failed to save PNG:", e)
 
@@ -656,7 +663,7 @@ class Load_file:
         for shape in self.temp_shapes:
             screen_pts = [
                 (int(round(x * self.zoom_scale)) + self.img_x,
-                int(round(y * self.zoom_scale)) + self.img_y)
+                 int(round(y * self.zoom_scale)) + self.img_y)
                 for (x, y) in shape
             ]
             flat = [coord for pt in screen_pts for coord in pt]
@@ -674,7 +681,8 @@ class Load_file:
                 px = int(round(prev[0] * self.zoom_scale)) + self.img_x
                 py = int(round(prev[1] * self.zoom_scale)) + self.img_y
                 self.canvas.create_line(px, py, sx, sy, fill="red", width=2, tags="temp_line")
-    # Mask overlay
+
+        # Mask overlay
         if self.mask_visible and self.mask_data is not None:
             h, w = self.mask_data.shape
             visible_mask = np.where(self.mask_data > 0, 255, 0).astype(np.uint8)
@@ -831,7 +839,6 @@ class Load_file:
             self.mask_visible = False
             return
 
-        # read binary mask
         with open(msk_path, "rb") as f:
             header = f.read(8)
             h, w = struct.unpack('II', header)
@@ -848,7 +855,6 @@ class Load_file:
         mask_img = Image.fromarray(visible_mask.T).convert("L")
         mask_img = mask_img.resize((disp_w, disp_h), Image.Resampling.NEAREST)
         self.tk_mask_overlay = ImageTk.PhotoImage(mask_img)
-        # anchor NW at image top-left
         if hasattr(self, "mask_overlay_id") and self.mask_overlay_id is not None:
             self.canvas.delete(self.mask_overlay_id)
         self.mask_overlay_id = self.canvas.create_image(self.img_x, self.img_y, anchor=tk.NW, image=self.tk_mask_overlay)
@@ -866,7 +872,6 @@ class Load_file:
         self.offset_x = 0
         self.offset_y = 0
         self.redraw_canvas()
-        # show overlay again
         self.draw_mask_overlay()
 
     def draw_mask_overlay(self):
@@ -891,7 +896,6 @@ class Load_file:
             canvas_x = self.canvas.canvasx(event.x)
             canvas_y = self.canvas.canvasy(event.y)
 
-        # Adjust for image offset
             img_x = (canvas_x - self.img_x) / self.zoom_scale
             img_y = (canvas_y - self.img_y) / self.zoom_scale
 
@@ -921,7 +925,7 @@ class Load_file:
                 messagebox.showinfo("Polygon Error", "Need at least 3 points to form a polygon.")
                 return
 
-    # Clear temp visuals
+            # Clear temp visuals
             for line_id in self.temp_line_ids:
                 self.canvas.delete(line_id)
             self.temp_line_ids.clear()
@@ -932,10 +936,8 @@ class Load_file:
 
             self.points.clear()
 
-
         self.canvas.bind("<Button-1>", on_left_click)
         self.canvas.bind("<Button-3>", on_right_click)
-    
         self.canvas.focus_set()
 
     def update_image(self,value=None):     
@@ -969,7 +971,7 @@ class Load_file:
 
     # ----------------- Save -----------------
     def savePressed(self, force=False):
-        if not self.shapes_modified and not force:
+        if not self.shapes_modified && not force:
             return
 
         image_path = self.ImagePath[self.CurrentIndex]
