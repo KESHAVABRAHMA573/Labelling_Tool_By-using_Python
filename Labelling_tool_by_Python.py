@@ -6,33 +6,8 @@ import json
 import struct
 import numpy as np
 import cv2
-import scipy.ndimage
-import threading
-from collections import OrderedDict
+import csv
 
-# ----------------- Small LRU cache for decoded PIL images -----------------
-class ImageLRU:
-    def __init__(self, capacity=8):
-        self.capacity = capacity
-        self._cache = OrderedDict()
-        self._lock = threading.Lock()
-
-    def get(self, key):
-        with self._lock:
-            if key in self._cache:
-                self._cache.move_to_end(key)
-                return self._cache[key]
-            return None
-
-    def put(self, key, value):
-        with self._lock:
-            if key in self._cache:
-                self._cache.move_to_end(key)
-            self._cache[key] = value
-            if len(self._cache) > self.capacity:
-                self._cache.popitem(last=False)
-
-# ----------------- App -----------------
 class Load_file:
     def __init__(self):
         self.root = tk.Tk()
@@ -60,6 +35,7 @@ class Load_file:
         self.img_x = 0
         self.img_y = 0
         self.mode = "label"
+        self.raw_np = None
 
         # Zoom/pan
         self.zoom_scale = 1.0
@@ -68,8 +44,6 @@ class Load_file:
         self.min_zoom = 0.1
         self.max_zoom = 8.0
 
-        # Cache for decoded, 8-bit RGB PIL images
-        self.cache = ImageLRU(capacity=10)
 
         # Build UI
         self.top_frame = tk.Frame(self.root, bg="white")
@@ -83,6 +57,8 @@ class Load_file:
         
         self.brightness_var = tk.DoubleVar(value=1.0)
         self.contrast_var = tk.DoubleVar(value=1.0)
+        self.gamma_var = tk.DoubleVar(value=1.0)
+
 
         self.canvas = tk.Canvas(self.canvas_frame, bg="white")
         self.canvas.grid(row=0, column=0, sticky="nsew")
@@ -122,60 +98,70 @@ class Load_file:
         self.Next.grid(row=1, column=3, padx=0, pady=0)
 
         self.save = tk.Button(self.bottom_frame ,text="Save", command=self.savePressed)
-        self.save.grid(row=0, column=9, padx=10, pady=10)
+        self.save.grid(row=2, column=9, padx=10, pady=10)
 
-        self.coord_label = tk.Label(self.bottom_frame, text="X: 0, Y: 0", width=25, height=2, font=("Bold",10))
+        self.coord_label = tk.Label(self.bottom_frame, text="X: 0, Y: 0", width=30, height=2, font=("Bold",10))
         self.coord_label.grid(row=2, column=0,columnspan=2, padx=5, pady=5)
         
-        self.reset_btn = tk.Button(self.bottom_frame, text="Reset", command=self.reset_brightness_contrast)
-        self.reset_btn.grid(row=1, column=6, columnspan=2, padx=0, pady=2)
+        '''self.reset_btn = tk.Button(self.bottom_frame, text="Reset", command=self.reset_brightness_contrast)
+        self.reset_btn.grid(row=1, column=7, columnspan=2, padx=0, pady=2)'''
 
         # Brightness label and slider
         brightness_frame = tk.Frame(self.bottom_frame)
-        brightness_frame.grid(row=1, column=4, columnspan=4, sticky="w", padx=10, pady=2)
+        brightness_frame.grid(row=0, column=14, columnspan=4, sticky="w", padx=10, pady=2)
 
         tk.Label(brightness_frame, text="Brightness", width=10, anchor="w").pack(side="left")
         tk.Button(brightness_frame, text="◀", width=2, command=lambda: self.adjust_brightness(-0.1)).pack(side="left")
-        tk.Scale(brightness_frame, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
+        tk.Scale(brightness_frame, from_=0.0, to=3.0, resolution=0.1, orient="horizontal",
          variable=self.brightness_var, command=self.update_image, length=200).pack(side="left")
         tk.Button(brightness_frame, text="▶", width=2, command=lambda: self.adjust_brightness(0.1)).pack(side="left")
 
         contrast_frame = tk.Frame(self.bottom_frame)
-        contrast_frame.grid(row=2, column=4, columnspan=4, sticky="w", padx=10, pady=2)
+        contrast_frame.grid(row=1, column=14, columnspan=4, sticky="w", padx=10, pady=2)
 
         tk.Label(contrast_frame, text="Contrast", width=10, anchor="w").pack(side="left")
         tk.Button(contrast_frame, text="◀", width=2, command=lambda: self.adjust_contrast(-0.1)).pack(side="left")
-        tk.Scale(contrast_frame, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
+        tk.Scale(contrast_frame, from_=0.0, to=3.0, resolution=0.1, orient="horizontal",
          variable=self.contrast_var, command=self.update_image, length=200).pack(side="left")
         tk.Button(contrast_frame, text="▶", width=2, command=lambda: self.adjust_contrast(0.1)).pack(side="left")
+        
+        gamma_frame = tk.Frame(self.bottom_frame)
+        gamma_frame.grid(row=2, column=14, columnspan=4, sticky="w", padx=10, pady=2)
+
+        tk.Label(gamma_frame, text="Gamma", width=10, anchor="w").pack(side="left")
+        tk.Button(gamma_frame, text="◀", width=2, command=lambda: self.adjust_gamma(-0.1)).pack(side="left")
+        tk.Scale(gamma_frame, from_=0.1, to=3.0, resolution=0.1, orient="horizontal",
+         variable=self.gamma_var, command=self.update_image, length=200).pack(side="left")
+        tk.Button(gamma_frame, text="▶", width=2, command=lambda: self.adjust_gamma(0.1)).pack(side="left")
+
 
         self.Labeling = tk.Button(self.bottom_frame, text="Start labelling", command=self.labellingPressed)
-        self.Labeling.grid(row=0, column=8, padx=10, pady=10)
+        self.Labeling.grid(row=0, column=4, padx=10, pady=10)
 
-        self.Undo = tk.Button(self.bottom_frame, text="Undo", command=self.undoPressed)
-        self.Undo.grid(row=2, column=8, padx=10, pady=10)
+        '''self.Undo = tk.Button(self.bottom_frame, text="Undo", command=self.undoPressed)
+        self.Undo.grid(row=2, column=8, padx=10, pady=10)'''
         
         self.fitWindow=tk.Button(self.bottom_frame,text="Fit Window",command=self.fitWindowPressed)
         self.fitWindow.grid(row=0,column=12 ,padx=10,pady=10)
 
         self.Delete = tk.Button(self.bottom_frame, text="Delete", command=self.deletePressed)
-        self.Delete.grid(row=2, column=9, padx=10, pady=10)
+        self.Delete.grid(row=0, column=9, padx=10, pady=10)
 
         self.formatSelector = tk.StringVar(value="json")
         self.json = tk.Radiobutton(self.bottom_frame, text="  Json   ", variable=self.formatSelector, value="json")
-        self.json.grid(row=0, column=10, padx=10, pady=10)
+        self.json.grid(row=1, column=4, padx=10, pady=10)
         
-        self.both = tk.Radiobutton(self.bottom_frame, text="Json & MSK", variable=self.formatSelector, value="both")
-        self.both.grid(row=1, column=10, padx=10, pady=10)
+        self.both = tk.Radiobutton(self.bottom_frame, text="Json & dat", variable=self.formatSelector, value="both")
+        self.both.grid(row=1, column=5, padx=10, pady=10)
 
         self.ShowMaskFile = tk.Button(self.bottom_frame, text="Show_MSk_File")
         self.ShowMaskFile.grid(row=1, column=12, padx=10, pady=10)
-        self.ShowMaskFile.bind("<ButtonPress-1>", self.show_msk_file)
+        self.ShowMaskFile.bind("<ButtonPress-1>", self.show_dat_file)
         self.ShowMaskFile.bind("<ButtonRelease-1>", self.close_msk_file)
         
         self.show_mask_var = tk.IntVar(value=False)
-        self.mask_checkbox = tk.Checkbutton(self.bottom_frame, text="Save MSK", variable=self.show_mask_var)
-        self.mask_checkbox.grid(row=1, column=9, padx=10, pady=10)
+        self.mask_checkbox = tk.Checkbutton(self.bottom_frame, text="Save MasK", variable=self.show_mask_var)
+        self.mask_checkbox.grid(row=2, column=4, padx=10, pady=10)
 
         self.zoomin = tk.Button(self.bottom_frame, text="Zoom_in", command=self.zoomInPressed)
         self.zoomin.grid(row=2, column=10,padx=0,pady=0)
@@ -249,6 +235,24 @@ class Load_file:
         self.contrast_var.set(new_val)
         self.update_image()
         
+    def adjust_gamma(self, delta):
+        new_val = round(self.gamma_var.get() + delta, 1)
+        self.gamma_var.set(max(0.1, min(3.0, new_val)))
+        self.update_image()
+    def load_labels_from_csv(self, csv_path="labels.csv"):
+        labels=[]
+        try :
+            with open(csv_path,newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    label=row.get("label")
+                    if label:
+                        labels.append(label.strip())
+        except Exception as e :
+            messagebox.showerror("Csv Error",f"failed to load labels:\n{e}")
+        return labels
+    
+            
     def on_mouse_down(self, event):
         if self.mode == "pan":
             self.drag_start_x = event.x
@@ -277,29 +281,27 @@ class Load_file:
             self.drag_start_y = event.y
             self.redraw_canvas()
 
-    # ----------------- FAST decoders -----------------
     def OpenCargoImage(self, name):
-        # Vectorized reader based on your original format logic.
         with open(name, 'rb') as f:
-            f.read(8)   # d1
-            f.read(4)   # d2
+            f.read(8)   
+            f.read(4)   
             ign = struct.unpack('<B', f.read(1))[0]
-            f.read(3)   # d2b
+            f.read(3)   
             bpp = struct.unpack('<I', f.read(4))[0]
             size = struct.unpack('<II', f.read(8))
             height, width = size[0], size[1]
             size2 = struct.unpack('<II', f.read(8))
             format1, flag = size2[0], size2[1]
             if ign == 24:
-                # Y offset (unused here)
+            
                 _ = struct.unpack('<I', f.read(4))[0]
-            f.read(8)  # d7
+            f.read(8)  
 
             if format1 > 2:
-                # Interleaved hi/low words
-                count = width * height * 2  # two planes interleaved
+                
+                count = width * height * 2  
                 data = np.frombuffer(f.read(count * 2), dtype='<u2', count=count)
-                # even -> low, odd -> high
+                
                 high = data[1::2].reshape((width, height)).T
                 low  = data[0::2].reshape((width, height)).T
             else:
@@ -310,48 +312,60 @@ class Load_file:
 
         return high, low
 
-    def OpenIMGimage(self, name):
-        # Vectorized .img reader (your original logic without Python loops)
+    def OpenIMGimage(self,name):
         with open(name, 'rb') as f:
-            h1 = struct.unpack('<h', f.read(2))[0]
-            s2  = struct.unpack('<h', f.read(2))[0]
-            _ = struct.unpack('<h', f.read(2))[0]   # h3 skip?
-            height3 = struct.unpack('<h', f.read(2))[0]
-            width = struct.unpack('<h', f.read(2))[0]
-            flag = struct.unpack('<h', f.read(2))[0]
-            yPos = struct.unpack('<h', f.read(2))[0]
-            flag2 = struct.unpack('<h', f.read(2))[0]
+            header = f.read(2)
+            h1 = struct.unpack('<h',header)
+            skip = f.read(2)
+            s1 = struct.unpack('<h',skip)
+            s2 = s1[0]
+            skip1 = f.read(2)
+            h3 = struct.unpack('<h',skip1)
+            height3 = h3[0]
+            skip1 = f.read(2)
+            w1 = struct.unpack('<h',skip1)
+            width = w1[0]
+            skip1 = f.read(2)
+            xPos = struct.unpack('<h',skip1)
+            flag = xPos[0]
+            skip1 = f.read(2)
+            yPos = struct.unpack('<h',skip1)
+            skip1 = f.read(2)
+            flag2 = struct.unpack('<h',skip1)
 
-            f.read(2*25)  # skip 25 x 2 bytes
+            for i in range(25):
+                skip1 = f.read(2)
 
-            f.read(s2)    # skip s2 bytes
+            for i in range(s2):
+                skip2 = f.read(1)
+            
+            height = int(height3/3)
 
-            height = int(height3 / 3)
+            bytes = f.read(width * height3 * 2)
+            data = np.frombuffer(bytes, dtype=np.uint16).copy()
 
-            data = np.frombuffer(f.read(width * height3 * 2), dtype='<u2', count=width*height3)
-            data = data.reshape((width, height3))
+            data = data.reshape([width,height3])
 
-            high = data[:, :height].T
-            low  = data[:, height:2*height].T
-            Zimage = data[:, 2*height:3*height].T
+            high = np.zeros([height,width])
+            low = np.zeros([height,width])
+            Zimage = np.zeros([height,width])
 
-            # Flip as original code
+            high= data[:,:height].T
+            low= data[:,height : 2* height].T
+            Zimage = data[:, 2*height : 3 * height].T
+
             high = np.flipud(high)
-            low  = np.flipud(low)
+            low = np.flipud(low)
             Zimage = np.flipud(Zimage)
-
+            
         return high, low
-
-    # Unified, cached loader returning 8-bit RGB PIL Image
+    
     def load_image(self, path):
-        cached = self.cache.get(path)
-        if cached is not None:
-            return cached
-
         ext = os.path.splitext(path)[1].lower()
-
+        self.raw_np=None
         if ext == '.cargoimage':
             high, _ = self.OpenCargoImage(path)
+            self.raw_np = high.copy() 
             p1, p99 = np.percentile(high, (1, 99))
             if p99 - p1 < 10:
                 p1, p99 = float(high.min()), float(high.max())
@@ -359,6 +373,7 @@ class Load_file:
             pil_img = Image.fromarray(img8, mode='L').convert('RGB')
         elif ext == '.img':
             high, _ = self.OpenIMGimage(path)
+            self.raw_np = high.copy() 
             p1, p99 = np.percentile(high, (1, 99))
             if p99 == p1:
                 p1, p99 = float(high.min()), float(high.max())
@@ -368,6 +383,7 @@ class Load_file:
             img_cv = cv2.imread(path, cv2.IMREAD_UNCHANGED)
             if img_cv is None:
                 raise ValueError("Failed to load image.")
+            self.raw_np = img_cv.copy() 
             if img_cv.ndim == 2:
                 # grayscale (8/16-bit)
                 if img_cv.dtype == np.uint16:
@@ -382,26 +398,8 @@ class Load_file:
                 if img_cv.dtype == np.uint16:
                     img_cv = cv2.convertScaleAbs(img_cv, alpha=(255.0 / 65535.0))
                 pil_img = Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
-
-        self.cache.put(path, pil_img)
         return pil_img
-
-    def prefetch_neighbors(self):
-        # Preload next/previous images in the background to make navigation smooth
-        if not self.ImagePath:
-            return
-        n = len(self.ImagePath)
-        idxs = [ (self.CurrentIndex + 1) % n, (self.CurrentIndex - 1) % n ]
-        def worker(paths):
-            for p in paths:
-                try:
-                    if self.cache.get(p) is None:
-                        _ = self.load_image(p)
-                except Exception:
-                    pass
-        threading.Thread(target=worker, args=( [self.ImagePath[i] for i in idxs], ), daemon=True).start()
-
-    # ----------------- Display -----------------
+    
     def showImagePaths(self):
         path = self.ImagePath[self.CurrentIndex]
         self.NumberShowing.delete(0, tk.END)
@@ -414,7 +412,7 @@ class Load_file:
             if not os.path.exists(path):
                 raise FileNotFoundError(f"File not found: {path}")
 
-            # Fast, cached unified loader (returns 8-bit RGB PIL)
+            
             pil_img = self.load_image(path)
             self.orig_img = pil_img
             orig_width, orig_height = pil_img.size
@@ -434,7 +432,6 @@ class Load_file:
             self.img = disp_img
             self.img_tk = ImageTk.PhotoImage(disp_img)
 
-            # place image at 0,0 and set scrollregion
             self.canvas.delete("all")
             canvas_w = self.canvas.winfo_width()
             canvas_h = self.canvas.winfo_height()
@@ -473,19 +470,21 @@ class Load_file:
                     for shape in data.get("shapes", []):
                         if shape.get("shape_type") == "polygon":
                             points = shape.get("points", [])
-                            # store as floats in original image coords
                             pts_float = [(float(p[0]), float(p[1])) for p in points]
                             self.temp_shapes.append(pts_float)
+                            self.new_shapes.append({
+                                "points": pts_float,
+                                "label": shape.get("label", "container")
+                            })
 
             self.redraw_canvas()
-            # Kick off neighbor prefetch in background (non-blocking)
-            self.prefetch_neighbors()
-
+            
         except Exception as e:
             messagebox.showerror("Error", f"Cannot open image:\n{e}")
 
     def show_pixel(self, event):
-        if self.orig_img is None:
+        if self.raw_np is None:
+            self.coord_label.config(text="(0,0) Value=(0, 0, 0)")
             return
 
         canvas_x = self.canvas.canvasx(event.x)
@@ -494,11 +493,24 @@ class Load_file:
         img_x = int((canvas_x - self.img_x) / self.zoom_scale)
         img_y = int((canvas_y - self.img_y) / self.zoom_scale)
 
-        orig_w, orig_h = self.orig_img.size
-        if 0 <= img_x < orig_w and 0 <= img_y < orig_h:
-            pixel = self.orig_img.getpixel((img_x, img_y))
-            self.coord_label.config(text=f"({img_x},{img_y}) Value={pixel}")
-        else:
+        try:
+            h, w = self.raw_np.shape[:2]
+            if 0 <= img_x < w and 0 <= img_y < h:
+                val = self.raw_np[img_y, img_x]
+                if isinstance(val, np.ndarray) or hasattr(val, '__len__'):
+                    if len(val) == 3:
+                        pixel_val = tuple(int(v) for v in val)
+                    elif len(val) == 1:
+                        pixel_val = (int(val[0]),) * 3
+                        val = self.show_mask_var
+                    else:
+                        pixel_val = tuple(int(val[i]) if i < len(val) else 0 for i in range(3))
+                else:
+                    pixel_val = (int(val),) * 3
+                self.coord_label.config(text=f"({img_x},{img_y}) Value={pixel_val}")
+            else:
+                self.coord_label.config(text="(0,0) Value=(0, 0, 0)")
+        except Exception:
             self.coord_label.config(text="(0,0) Value=(0, 0, 0)")
 
     def confirm_save_before_switch(self, direction):
@@ -614,7 +626,7 @@ class Load_file:
                     del self.polygon_id[index]
                     del self.temp_shapes[index]
                     self.shapes_modified = True
-                    self.update_msk_file()
+                    self.update_dat_file()
                     self.redraw_canvas()
                     break
             # Clean up
@@ -627,11 +639,11 @@ class Load_file:
         self.canvas.bind("<Motion>", on_motion)
         self.canvas.bind("<Button-1>", on_click)
 
-    def update_msk_file(self):
+    def update_dat_file(self):
         if not self.ImagePath:
             return
         image_path = self.ImagePath[self.CurrentIndex]
-        msk_path = os.path.splitext(image_path)[0] + "_label.msk"
+        msk_path = os.path.splitext(image_path)[0] + "_label.dat"
         orig_w, orig_h = self.orig_img.size
         mask = np.zeros((orig_w, orig_h), dtype=np.uint8)
         for shape in self.temp_shapes:
@@ -730,7 +742,7 @@ class Load_file:
         annotated_path = os.path.splitext(image_path)[0] + "_labelled.png"
         annotated_img.save(annotated_path)
 
-    def save_msk_file(self, image_path, shapes):
+    def save_dat_file(self, image_path, shapes):
         # Save binary .msk and optional png
         orig_w, orig_h = self.orig_img.size
         mask = np.zeros((orig_w, orig_h), dtype=np.uint8)
@@ -740,7 +752,7 @@ class Load_file:
                 continue
             cv2.fillPoly(mask, [pts], 255)
 
-        msk_path = os.path.splitext(image_path)[0] + "_label.msk"
+        msk_path = os.path.splitext(image_path)[0] + "_label.dat"
         if os.path.exists(msk_path):
             os.remove(msk_path)
         with open(msk_path, "wb") as f:
@@ -823,12 +835,12 @@ class Load_file:
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
 
     # ----------------- Mask overlay / show/hide -----------------
-    def show_msk_file(self, event=None):
+    def show_dat_file(self, event=None):
         if not self.ImagePath:
             messagebox.showerror("Missing", "No image loaded")
             return
         image_path = self.ImagePath[self.CurrentIndex]
-        msk_path = os.path.splitext(image_path)[0] + "_label.msk"
+        msk_path = os.path.splitext(image_path)[0] + "_label.dat"
         if not os.path.exists(msk_path):
             messagebox.showerror("Missing", "No .msk file found for current image")
             return
@@ -893,6 +905,7 @@ class Load_file:
         if self.mode != "label":
             return
         def on_left_click(event):
+            
             canvas_x = self.canvas.canvasx(event.x)
             canvas_y = self.canvas.canvasy(event.y)
 
@@ -914,31 +927,68 @@ class Load_file:
                 py = int(round(prev[1] * self.zoom_scale)) + self.img_y
                 line_id = self.canvas.create_line(px, py, sx, sy, fill="red", width=2,tags="temp_line")
                 self.temp_line_ids.append(line_id)
-
+                
         def on_right_click(event):
-            if len(self.points) > 2:
-                self.temp_shapes.append([(float(x), float(y)) for x, y in self.points])
-                self.new_shapes.append(list(self.points))
-                self.shapes_modified = True
-                self.redraw_canvas()
-            else:
+            if len(self.points) < 3:
                 messagebox.showinfo("Polygon Error", "Need at least 3 points to form a polygon.")
                 return
 
-            # Clear temp visuals
-            for line_id in self.temp_line_ids:
-                self.canvas.delete(line_id)
-            self.temp_line_ids.clear()
+            labels = self.load_labels_from_csv(r"C:\Users\kgopidesi\Downloads\labels.csv")
+            if not labels:
+                messagebox.showerror("Label Error", "No labels found in CSV.")
+                return
 
-            for point_id in self.temp_point_ids:
-                self.canvas.delete(point_id)
-            self.temp_point_ids.clear()
+    # Close polygon visually
+            pts_float = [(float(x), float(y)) for x, y in self.points]
+            screen_pts = [
+                (int(round(x * self.zoom_scale)) + self.img_x,
+                int(round(y * self.zoom_scale)) + self.img_y)
+                for (x, y) in pts_float
+            ]
+            flat = [coord for pt in screen_pts for coord in pt]
+            polygon_id = self.canvas.create_polygon(flat, outline="red", fill='', width=2, tags="polygon")
+            self.polygon_id.append(polygon_id)
 
-            self.points.clear()
+    # Create label popup
+            popup = tk.Toplevel(self.root)
+            popup.title("Select Label")
+            popup.geometry("200x200")
+            popup.transient(self.root)
+            popup.grab_set()
+
+            tk.Label(popup, text="Choose label:").pack(pady=10)
+
+            selected_label = tk.StringVar(value=labels[0])
+
+            for label in labels:
+                tk.Radiobutton(
+                    popup,
+                    text=label,
+                    variable=selected_label,
+                    value=label,
+                    command=lambda l=label: self._save_polygon_with_label(l, popup)
+                    ).pack(anchor="w")
 
         self.canvas.bind("<Button-1>", on_left_click)
         self.canvas.bind("<Button-3>", on_right_click)
-        self.canvas.focus_set()
+        
+    def _save_polygon_with_label(self, label, popup):
+        pts_float = [(float(x), float(y)) for x, y in self.points]
+        self.temp_shapes.append(pts_float)
+        self.new_shapes.append({
+            "points": pts_float,
+            "label": label
+        })
+        self.shapes_modified = True
+        self.redraw_canvas()
+        self.points.clear()
+        for line_id in self.temp_line_ids:
+            self.canvas.delete(line_id)
+        for point_id in self.temp_point_ids:
+            self.canvas.delete(point_id)
+        self.temp_line_ids.clear()
+        self.temp_point_ids.clear()
+        popup.destroy()
 
     def update_image(self,value=None):     
         if self.orig_img is None:
@@ -946,9 +996,13 @@ class Load_file:
 
         brightness = self.brightness_var.get()
         contrast = self.contrast_var.get()
+        gamma = self.gamma_var.get()
 
         img_np = np.array(self.orig_img).astype(np.float32)
         img_np = img_np * contrast + (brightness - 1.0) * 255
+        img_np = np.clip(img_np, 0, 255).astype(np.uint8)
+        
+        img_np = 255.0 * np.power(img_np / 255.0, gamma)
         img_np = np.clip(img_np, 0, 255).astype(np.uint8)
 
         adjusted_img = Image.fromarray(img_np)
@@ -967,13 +1021,13 @@ class Load_file:
     def reset_brightness_contrast(self):
         self.brightness_var.set(1.0)
         self.contrast_var.set(1.0)
+        self.gamma_var.set(1.0)
         self.update_image()
 
     # ----------------- Save -----------------
     def savePressed(self, force=False):
-        if not self.shapes_modified && not force:
+        if not self.shapes_modified and not force:
             return
-
         image_path = self.ImagePath[self.CurrentIndex]
         base_name, extension = os.path.splitext(image_path)
         selected_format = self.formatSelector.get()
@@ -989,14 +1043,12 @@ class Load_file:
                 "imageHeight": orig_h,
                 "imageWidth": orig_w
             }
-            for shape_points in self.temp_shapes:
-                converted_points = []
-                for point in shape_points:
-                    x = int(round(point[0]))
-                    y = int(round(point[1]))
-                    converted_points.append([x, y])
+            for shape_data in self.new_shapes:
+                shape_points = shape_data["points"]
+                label = shape_data.get("label", "container")
+                converted_points = [[int(round(x)), int(round(y))] for x, y in shape_points]
                 shape = {
-                    "label": "container",
+                    "label": label,
                     "points": converted_points,
                     "group_id": None,
                     "description": "",
@@ -1008,8 +1060,8 @@ class Load_file:
             with open(save_path, "w") as file:
                 json.dump(data, file, indent=4)
 
-        if selected_format in ("msk", "both"):
-            self.save_msk_file(image_path, self.temp_shapes)
+        if selected_format in ("dat", "both"):
+            self.save_dat_file(image_path, self.temp_shapes)
 
         self.new_shapes.clear()
         self.shapes_modified = False
