@@ -21,7 +21,7 @@ class Load_file:
         self.labelling = 0
         self.points = []
         self.polygon_id = []
-        self.temp_shapes = []     # list of polygons in original image coords (floats)
+        self.temp_shapes = []     
         self.new_shapes = []
         self.shapes_modified = False
         self.temp_line_ids = []
@@ -29,8 +29,8 @@ class Load_file:
         self.edit_undo_stack = []
         self.edit_redo_stack = []
         self.dat_shapes = []
-        self.orig_img = None      # PIL original image (unscaled, 8-bit RGB)
-        self.img = None           # current displayed (scaled) PIL image
+        self.orig_img = None      
+        self.img = None           
         self.img_tk = None
         self.mask_data = None
         self.mask_visible = False
@@ -53,16 +53,12 @@ class Load_file:
         self.label_popup_open = False
         self.label_popup_ref = None
 
-
-        # Zoom/pan
         self.zoom_scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
         self.min_zoom = 0.1
         self.max_zoom = 8.0
 
-
-        # Build UI
         self.top_frame = tk.Frame(self.root, bg="white")
         self.top_frame.pack(fill="both", expand=True)
 
@@ -92,7 +88,6 @@ class Load_file:
     
         self.enable_click_to_zoom()
 
-        # Bottom controls
         self.Listfile = tk.Label(self.bottom_frame, text="List File:")
         self.Listfile.grid(row=0, column=0, padx=0, pady=0)
 
@@ -124,8 +119,10 @@ class Load_file:
         
         self.reset_btn = tk.Button(self.bottom_frame, text="Reset", command=self.reset_brightness_contrast)
         self.reset_btn.grid(row=1, column=13, padx=0, pady=0)
+        
+        self.reset_btn = tk.Button(self.bottom_frame, text="Convert", command=self.show_convert_options)
+        self.reset_btn.grid(row=0, column=14, padx=200, pady=10)
 
-        # Brightness label and slider
         brightness_frame = tk.Frame(self.bottom_frame)
         brightness_frame.grid(row=0, column=8, columnspan=4, sticky="w", padx=10, pady=2)
 
@@ -203,8 +200,8 @@ class Load_file:
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
 
         self.root.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-1 * int(e.delta / 120), "units"))
-        self.root.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))  # Linux scroll up
-        self.root.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))   # Linux scroll down
+        self.root.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units")) 
+        self.root.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))   
         self.root.bind("<Delete>", lambda event: self.undoPressed())
         self.root.bind("<s>", lambda event: self.handle_s_key())
         self.root.bind(".", lambda event: self.nextPressed())       
@@ -218,7 +215,7 @@ class Load_file:
         self.root.bind("<z>", lambda e: self.enable_drag_zoom())
         self.root.mainloop()
 
-    # ----------------- UI callbacks -----------------
+    
     def browsePressed(self):
         file_path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt")], title="Select a .txt file")
         if file_path:
@@ -271,7 +268,6 @@ class Load_file:
         except ValueError:
             messagebox.showwarning("Invalid Input", "Please enter a valid number")
 
-    #------------Edit-------------
     def editPressed(self):
         self.mode = "edit"
         self.canvas.config(cursor="arrow")
@@ -280,8 +276,7 @@ class Load_file:
         self.canvas.bind("<B1-Motion>", self.drag_segment_preview)
         self.canvas.bind("<ButtonRelease-1>", self.finish_drag_segment)
         self.root.focus_set()
-
-        
+      
     def edit_combined_handler(self, event):
         cx = self.canvas.canvasx(event.x)
         cy = self.canvas.canvasy(event.y)
@@ -386,8 +381,6 @@ class Load_file:
                     self.redraw_canvas()
                     self.labellingPressed()
                     return
-
-
 
         for shape_index, shape in enumerate(self.temp_shapes):
             for i in range(len(shape)):
@@ -1608,6 +1601,180 @@ class Load_file:
         self.show_temp_message(msg)
         self.last_saved_format = selected_format
         self.root.focus_set()
+        
+    def convert_json_to_txt(self):
+        if not self.ImagePath:
+            self.show_temp_message("No image loaded")
+            return
+
+        image_path = self.ImagePath[self.CurrentIndex]
+        base_name = os.path.splitext(image_path)[0]
+        json_path = base_name + "_label.json"
+        txt_path = base_name + "_label.txt"
+
+        if not os.path.exists(json_path):
+            self.show_temp_message("JSON file not found")
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+
+            lines = []
+            count = 1
+            for shape in data.get("shapes", []):
+                if shape.get("shape_type") == "polygon":
+                    points = shape.get("points", [])
+                    if not points:
+                        continue
+                    xs = [p[0] for p in points]
+                    ys = [p[1] for p in points]
+                    left = int(round(min(xs)))
+                    right = int(round(max(xs)))
+                    top = int(round(min(ys)))
+                    bottom = int(round(max(ys)))
+                    lines.append(f"{count}")
+                    lines.append(f"{top}")
+                    lines.append(f"{left}")
+                    lines.append(f"{bottom}")
+                    lines.append(f"{right}")
+                    lines.append("")  # blank line between entries
+                    count += 1
+
+            if lines:
+                with open(txt_path, "w") as f:
+                    f.write("\n".join(lines))
+                self.show_temp_message("TXT file saved with polygon counts")
+            else:
+                self.show_temp_message("No valid polygons found in JSON")
+
+        except Exception as e:
+            messagebox.showerror("Conversion Error", f"Failed to convert JSON to TXT:\n{e}")
+
+    def convert_json_to_cargomarkerxml(self):
+        if not self.ImagePath:
+            self.show_temp_message("No image loaded")
+            return
+
+        image_path = self.ImagePath[self.CurrentIndex]
+        base_name = os.path.splitext(image_path)[0]
+        json_path = base_name + "_label.json"
+        xml_path = base_name + ".cargomarker"
+
+        if not os.path.exists(json_path):
+            self.show_temp_message("JSON file not found")
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+
+            xml_lines = []
+            for shape in data.get("shapes", []):
+                if shape.get("shape_type") == "polygon":
+                    points = shape.get("points", [])
+                    if not points:
+                        continue
+                    xs = [p[0] for p in points]
+                    ys = [p[1] for p in points]
+                    left = int(round(min(xs)))
+                    right = int(round(max(xs)))
+                    top = int(round(min(ys)))
+                    bottom = int(round(max(ys)))
+
+                    xml_lines.append(f'<shape type="rectangle">')
+                    xml_lines.append(f'  <x:color value="#ff0000"/>')
+                    xml_lines.append(f'  <x:rect left="{left}" top="{top}" right="{right}" bottom="{bottom}"/>')
+                    xml_lines.append(f'  <x:text value="BULK"/>')
+                    xml_lines.append(f'</shape>')
+
+            if xml_lines:
+                with open(xml_path, "w") as f:
+                    f.write("\n".join(xml_lines))
+                self.show_temp_message("CargoMarker XML saved")
+            else:
+                self.show_temp_message("No valid polygons found in JSON")
+
+        except Exception as e:
+            messagebox.showerror("Conversion Error", f"Failed to convert JSON to CargoMarker XML:\n{e}")
+
+    def convert_json_to_dat(self):
+        if not self.ImagePath:
+            self.show_temp_message("No image loaded")
+            return
+
+        image_path = self.ImagePath[self.CurrentIndex]
+        base_name = os.path.splitext(image_path)[0]
+        json_path = base_name + "_label.json"
+        dat_path = base_name + "_label.dat"
+
+        if not os.path.exists(json_path):
+            self.show_temp_message("JSON file not found")
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+
+            orig_w, orig_h = self.orig_img.size
+            mask = np.zeros((orig_w, orig_h), dtype=np.uint8)
+
+            for shape in data.get("shapes", []):
+                if shape.get("shape_type") == "polygon":
+                    points = shape.get("points", [])
+                    pts = np.array([[int(round(y)), int(round(x))] for x, y in points], dtype=np.int32)
+                    if pts.size > 0:
+                        cv2.fillPoly(mask, [pts], 255)
+
+            with open(dat_path, "wb") as f:
+                f.write(struct.pack('II', orig_h, orig_w))
+                f.write(mask.tobytes())
+
+            if self.show_mask_var.get():
+                try:
+                    png_path = base_name + "_mask.png"
+                    img = Image.fromarray(mask.T)
+                    img.save(png_path)
+                    self.show_temp_message("DAT and PNG saved from JSON")
+                except Exception as e:
+                    print("Failed to save PNG:", e)
+            else:
+                self.show_temp_message("DAT file saved from JSON")
+
+        except Exception as e:
+            messagebox.showerror("Conversion Error", f"Failed to convert JSON to DAT:\n{e}")
+
+    def show_convert_options(self):
+        popup = tk.Toplevel(self.root)
+        popup.title("Convert JSON to Format")
+        popup.geometry("300x200")
+        popup.transient(self.root)
+        popup.grab_set()
+
+        popup.update_idletasks()
+        root_x = self.root.winfo_rootx()
+        root_y = self.root.winfo_rooty()
+        root_w = self.root.winfo_width()
+        root_h = self.root.winfo_height()
+
+        popup_w = popup.winfo_width()
+        popup_h = popup.winfo_height()
+        
+        x = root_x + root_w - popup_w - 20
+        y = root_y + root_h - popup_h - 40
+        
+        popup.geometry(f"+{x}+{y}")
+
+        tk.Label(popup, text="Choose conversion format:", font=("Arial", 12)).pack(pady=10)
+
+        options = [
+            ("JSON to .txt", self.convert_json_to_txt),
+            ("JSON to .cargomarkerxml", self.convert_json_to_cargomarkerxml),
+            ("Json to .dat", self.convert_json_to_dat)
+        ]
+
+        for label, func in options:
+            tk.Button(popup, text=label, width=25, command=lambda f=func, p=popup: (f(), p.destroy())).pack(pady=5)
 
 if __name__ == "__main__":
     Load_file()
