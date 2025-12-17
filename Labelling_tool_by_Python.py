@@ -10,26 +10,72 @@ import cv2
 import csv
 import math
 
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        widget.bind("<Enter>", self.show_tip)
+        widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, background="#ffffe0", relief="solid", borderwidth=1, font=("Segoe UI", 9))
+        label.pack(ipadx=6, ipady=2)
+
+    def hide_tip(self, event=None):
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+class ToolTipp:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        widget.bind("<Enter>", self.show_tip)
+        widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() - 30 
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, background="#ffffe0", relief="solid", borderwidth=1, font=("Segoe UI", 9))
+        label.pack(ipadx=6, ipady=2)
+
+    def hide_tip(self, event=None):
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
 class Load_file:
     def __init__(self):
         self.root = tk.Tk()
         topbar = tk.Frame(self.root, bg="white")
         topbar.pack(side="top", fill="x")
         
-        
         file_btn = tk.Menubutton(topbar, text="File", font=("Helvetica", 10, "bold"), bg="white")
         file_menu = tk.Menu(file_btn, tearoff=0)
-        file_menu.add_command(label="Select File", command=self.select_file)
-        file_menu.add_command(label="Select Folder", command=self.select_folder)
-        file_menu.add_command(label="Select .txt file", command=self.select_txt_file)
+        file_menu.add_command(label="Select File            Ctrl + F ", command=self.select_file)
+        file_menu.add_command(label="Select Folder       Ctrl + O", command=self.select_folder)
+        file_menu.add_command(label="Select .txt file      Ctrl + T", command=self.select_txt_file)
         file_btn.config(menu=file_menu)
         file_btn.pack(side="left", padx=10, pady=(6,5))
 
         convert_btn = tk.Menubutton(topbar, text="Convert", font=("Helvetica", 10, "bold"), bg="white")
         convert_menu = tk.Menu(convert_btn, tearoff=0)
-        convert_menu.add_command(label="Json to Dat", command=self.convert_json_to_dat)
-        convert_menu.add_command(label="Json to Txt", command=self.convert_json_to_txt)
-        convert_menu.add_command(label="Json to cargoMarkerxml", command=self.convert_json_to_cargomarkerxml)
+        convert_menu.add_command(label="Json to Dat                              Alt + D", command=self.convert_json_to_dat)
+        convert_menu.add_command(label="Json to Txt                              Alt + T", command=self.convert_json_to_txt)
+        convert_menu.add_command(label="Json to cargoMarkerxml      Alt + C", command=self.convert_json_to_cargomarkerxml)
         convert_btn.config(menu=convert_menu)
         convert_btn.pack(side="left", padx=10, pady=(6,5))
 
@@ -66,6 +112,7 @@ class Load_file:
         self.img_x = 0
         self.img_y = 0
         self.mode = "label"
+        self.label_mode = "polygon"
         self.raw_np = None
         self.editing_shape_index = None
         self.editing_segment_index = None
@@ -99,7 +146,6 @@ class Load_file:
         self.contrast_var = tk.DoubleVar(value=1.0)
         self.gamma_var = tk.DoubleVar(value=1.0)
 
-
         self.canvas = tk.Canvas(self.canvas_frame, bg="white")
         self.canvas.grid(row=0, column=0, sticky="nsew")
 
@@ -118,36 +164,45 @@ class Load_file:
         self.Load1_var = tk.StringVar()
         self.Load1 = tk.Button(self.bottom_frame, textvariable=self.Load1_var, width=45, anchor="w", command=self.open_dropdown)
         self.Load1.grid(row=0, column=0, columnspan=2, padx=10, pady=10)
+        ToolTip(self.Load1,"Press This Button to see All Paths.")
 
-        self.dropdown_items = []  # (index, path, is_labeled)
+        self.dropdown_items = []  
         self.dropdown_popup = None
 
         self.rect = tk.Button(self.bottom_frame ,text="Rectangle Zoom",width=14, command=self.enable_drag_zoom)
         self.rect.grid(row=2,rowspan=2,column=6,padx=10,pady=10)
+        ToolTipp(self.rect,"Shortcut : s")
+        
         
         next_prev_frame = tk.Frame(self.bottom_frame, bg="lightgray")
         next_prev_frame.grid(row=0, column=2, padx=10, pady=10)
 
         self.prev = tk.Button(next_prev_frame, text="Prev", width=6, command=self.previousPressed)
         self.prev.pack(side="left", padx=(0, 5))
+        ToolTip(self.prev,"Shortcut : P")
 
         self.next = tk.Button(next_prev_frame, text="Next", width=6, command=self.nextPressed)
         self.next.pack(side="left")
+        ToolTip(self.next,"Shortcut : N")
         
         edit_delete_frame = tk.Frame(self.bottom_frame, bg="lightgray")
         edit_delete_frame.grid(row=1, column=5, padx=10, pady=10)
         
         self.Edit = tk.Button(edit_delete_frame, text="Edit", width=6,command=self.editPressed)
         self.Edit.pack(side="left", padx=(0, 5))
+        ToolTip(self.Edit,"Shortcut : E")
         
         self.Delete = tk.Button(edit_delete_frame, text="Delete", width=6,command=self.deletePressed)
         self.Delete.pack(side="left")
+        ToolTip(self.Delete,"Shortcut : Delete")
         
         self.save = tk.Button(self.bottom_frame ,text="Save",width=14,command=self.savePressed)
         self.save.grid(row=2, column=5,rowspan=2, padx=10, pady=10)
+        ToolTipp(self.save,"Shortcut : Ctrl+S")
         
         self.reset_btn = tk.Button(self.bottom_frame, text="Reset",width=14, command=self.reset_brightness_contrast)
         self.reset_btn.grid(row=2, column=7, padx=0, pady=0)
+        ToolTipp(self.reset_btn,"Shortcut : R")
 
         brightness_frame = tk.Frame(self.bottom_frame)
         brightness_frame.grid(row=0, column=8, columnspan=4, sticky="w", padx=10, pady=2)
@@ -178,18 +233,23 @@ class Load_file:
 
         self.Labeling = tk.Button(self.bottom_frame, text="Start labelling",width=14, command=self.labellingPressed)
         self.Labeling.grid(row=0, column=4, padx=10, pady=10)
+        
+        ToolTip(self.Labeling,"Shortcut : S")
 
         undo_redo_frame = tk.Frame(self.bottom_frame, bg="lightgray")
         undo_redo_frame.grid(row=0, column=5, padx=10, pady=10)
 
         self.Undo = tk.Button(undo_redo_frame, text="Undo", width=6, command=self.undoPressed)
         self.Undo.pack(side="left", padx=(0, 5))
-
+        ToolTip(self.Undo,"Shortcut : Ctrl+Z")
+        
         self.Redo = tk.Button(undo_redo_frame, text="Redo", width=6, command=self.redoPressed)
         self.Redo.pack(side="left")
+        ToolTip(self.Redo,"Shortcut : Ctrl+Y")
 
         self.fitWindow=tk.Button(self.bottom_frame,text="Fit Window",width=14,command=self.fitWindowPressed)
         self.fitWindow.grid(row=0,column=7 ,padx=10,pady=10)
+        ToolTip(self.fitWindow,"Shortcut : F")
 
 
         self.formatSelector = tk.StringVar(value="json")
@@ -205,6 +265,7 @@ class Load_file:
 
         self.ShowMaskFile = tk.Button(self.bottom_frame, text="Show_DAT_File",width=15)
         self.ShowMaskFile.grid(row=2, column=2,rowspan=2, padx=10, pady=10)
+        ToolTipp(self.ShowMaskFile,"Shortcut : D")
         self.ShowMaskFile.bind("<ButtonPress-1>", self.show_dat_file)
         self.ShowMaskFile.bind("<ButtonRelease-1>", self.close_msk_file)
         
@@ -214,39 +275,50 @@ class Load_file:
 
         self.zoomin = tk.Button(self.bottom_frame, text="Zoom_in",width=14, command=self.zoomInPressed)
         self.zoomin.grid(row=1, column=6,padx=10,pady=10)
+        ToolTip(self.zoomin,"Shortcut : [")
 
         self.zoomout = tk.Button(self.bottom_frame, text="Zoom_out", width=14,command=self.zoomOutPressed)
         self.zoomout.grid(row=1, column=7,padx=10,pady=10)
+        ToolTip(self.zoomout,"Shortcut : ]")
         
-        self.toggle_mode_btn = tk.Button(self.bottom_frame, text="🖐️Palm Mode",width=14, command=self.toggle_mode)
+        self.toggle_mode_btn = tk.Button(self.bottom_frame, text="🖐️Pan Mode",width=14, command=self.toggle_mode)
         self.toggle_mode_btn.grid(row=0, column=6, padx=10, pady=5)
+        ToolTip(self.toggle_mode_btn,"Shortcut : L")
     
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
+        
+        self.root.bind("<Alt-r>", lambda event: self.toggle_shape_mode())
 
         self.root.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(-1 * int(e.delta / 120), "units"))
         self.root.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units")) 
         self.root.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))   
-        self.root.bind("<Delete>", lambda event: self.undoPressed())
-        self.root.bind("<l>", lambda event: self.toggle_mode())
-        self.root.bind("<Control-s>", lambda event: self.handle_s_key())
-        self.root.bind(".", lambda event: self.nextPressed())       
-        self.root.bind(",", lambda event: self.previousPressed())   
-        self.root.bind("<Control-z>", lambda event: self.undoPressed())
-        self.root.bind("<Control-y>", lambda event: self.redoPressed())
-        self.root.bind("<Control-=>", lambda event: self.zoomInPressed())
-        self.root.bind("<Control-minus>", lambda event: self.zoomOutPressed())
-        self.root.bind("<s>",lambda event : self.labellingPressed())
-        self.root.bind("<f>",lambda event : self.fitWindowPressed())
-        self.root.bind("<r>",lambda event : self.reset_brightness_contrast())
-        self.root.bind("<Alt-f>",lambda event : self.select_file())
-        self.root.bind("<Alt-o>",lambda event : self.select_folder())
-        self.root.bind("<Alt-l>",lambda event : self.select_txt_file())
-        self.root.bind("<Alt-c>",lambda event : self.show_convert_options())
         
-        self.root.bind("<z>", lambda e: self.enable_drag_zoom())
+        for key in ("<l>", "<L>"):self.root.bind(key, self.toggle_mode)
+        for key in ("<Control-s>", "<Control-S>"):self.root.bind(key, self.handle_s_key)
+        self.root.bind("<Delete>",lambda event: self.deletePressed())
+        for key in ("<E>", "<e>"):self.root.bind(key, self.editPressed)
+        for key in ("<d>", "<D>"):self.root.bind(key, self.show_dat_file)
+        for key in ("<p>", "<P>"):self.root.bind(key, self.previousPressed)       
+        for key in ("<n>", "<N>"):self.root.bind(key, self.nextPressed)   
+        for key in ("<Control-z>", "<Control-Z>"):self.root.bind(key, self.undoPressed)
+        for key in ("<Control-y>", "<Control-Y>"):self.root.bind(key, self.redoPressed)
+        self.root.bind("<[>", lambda event: self.zoomInPressed())
+        self.root.bind("<]>", lambda event: self.zoomOutPressed())
+        for key in ("<s>", "<S>"):self.root.bind(key, self.labellingPressed)
+        for key in ("<f>", "<F>"):self.root.bind(key, self.fitWindowPressed)
+        for key in ("<r>", "<R>"):self.root.bind(key, self.reset_brightness_contrast)
+        for key in ("<Control-f>", "<Control-F>"):self.root.bind(key, self.select_file)
+        for key in ("<Control-o>", "<Control-O>"):self.root.bind(key, self.select_folder)
+        for key in ("<Control-t>", "<Control-T>"):self.root.bind(key, self.select_file)
+        for key in ("<Alt-c>", "<Alt-C>"):self.root.bind(key, self.convert_json_to_cargomarkerxml)
+        for key in ("<Alt-d>", "<Alt-D>"):self.root.bind(key, self.convert_json_to_dat)
+        for key in ("<Alt-t>", "<Alt-T>"):self.root.bind(key, self.convert_json_to_txt)
+        
+        for key in ("<z>", "<Z>"):self.root.bind(key, self.enable_drag_zoom)
         self.root.mainloop()
 #----------------------------------------------------
-    def select_file(self):
+
+    def select_file(self,event=None):
         file_paths = filedialog.askopenfilenames(
         title="Select image files",
         filetypes=[
@@ -289,7 +361,7 @@ class Load_file:
         self.root.focus_set()
         
         
-    def select_txt_file(self):
+    def select_txt_file(self,event=None):
         file_paths = filedialog.askopenfilenames(
         title="Select image files",
         filetypes=[("Text files", "*.txt")])
@@ -319,7 +391,7 @@ class Load_file:
         self.populate_dropdown()
         self.root.focus_set()
         
-    def select_folder(self):
+    def select_folder(self,event=None):
         folder_path = filedialog.askdirectory(title="Select a folder containing images")
         if not folder_path:
             return
@@ -507,7 +579,7 @@ class Load_file:
             self.CurrentIndex = selected
             self.showImagePaths()
 
-    def editPressed(self):
+    def editPressed(self,event=None):
         self.mode = "edit"
         self.canvas.config(cursor="arrow")
         self.labellingPressed()
@@ -662,7 +734,7 @@ class Load_file:
 
         shape.pop((segment_index + 1) % len(shape))
 
-    def toggle_mode(self):
+    def toggle_mode(self,event=None):
         if self.mode == "label":
             self.mode = "pan"
             self.canvas.config(cursor="hand2")
@@ -1014,13 +1086,13 @@ class Load_file:
         self.canvas.config(cursor="arrow")
         self.labellingPressed()
 
-    def nextPressed(self):
+    def nextPressed(self,event=None):
         if self.ImagePath:
             self.confirm_save_before_switch("next")
         self.root.focus_set()
 
 
-    def previousPressed(self):
+    def previousPressed(self,event=None):
         if self.ImagePath: 
             self.confirm_save_before_switch("prev")
             self.root.focus_set()
@@ -1116,7 +1188,7 @@ class Load_file:
                 })
                 self.redraw_canvas()
 
-    def fitWindowPressed(self):
+    def fitWindowPressed(self,event=None):
         if not self.orig_img:
             return
         canvas_w = self.canvas.winfo_width()
@@ -1442,7 +1514,7 @@ class Load_file:
         self.redraw_canvas()
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
         
-    def enable_drag_zoom(self):
+    def enable_drag_zoom(self,event=None):
         self.canvas.config(cursor="tcross")
         self.canvas.bind("<Button-1>", self.start_zoom_rect)
         self.canvas.bind("<B1-Motion>", self.draw_zoom_rect)
@@ -1522,11 +1594,6 @@ class Load_file:
             self.root.after(10, lambda: messagebox.showerror("Missing", "No Dat file found for current image"))
             return
 
-        '''if getattr(self, "mask_visible", False):
-            if hasattr(self, "mask_overlay_id") and self.mask_overlay_id is not None:
-                self.canvas.delete(self.mask_overlay_id)
-            self.mask_visible = False
-            return'''
 
         with open(msk_path, "rb") as f:
             header = f.read(8)
@@ -1583,35 +1650,83 @@ class Load_file:
         self.mask_overlay_id = self.canvas.create_image(self.img_x, self.img_y, anchor=tk.NW, image=self.tk_mask_overlay)
         self.mask_visible = True
 
-    def labellingPressed(self):
+    def labellingPressed(self,event=None):
         if self.mode != "label":
             return
         def on_left_click(event):
-            
-            canvas_x = self.canvas.canvasx(event.x)
-            canvas_y = self.canvas.canvasy(event.y)
+            if self.label_mode == "polygon":
 
-            img_x = (canvas_x - self.img_x) / self.zoom_scale
-            img_y = (canvas_y - self.img_y) / self.zoom_scale
+                canvas_x = self.canvas.canvasx(event.x)
+                canvas_y = self.canvas.canvasy(event.y)
 
-            orig_w, orig_h = self.orig_img.size
-            if not (0 <= img_x < orig_w and 0 <= img_y < orig_h):
+                img_x = (canvas_x - self.img_x) / self.zoom_scale
+                img_y = (canvas_y - self.img_y) / self.zoom_scale
+
+                orig_w, orig_h = self.orig_img.size
+                if not (0 <= img_x < orig_w and 0 <= img_y < orig_h):
+                    return  
+                self.points.append((img_x, img_y))
+                self.edit_redo_stack.clear()
+                sx = int(round(img_x * self.zoom_scale)) + self.img_x
+                sy = int(round(img_y * self.zoom_scale)) + self.img_y
+                point_id = self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red",tags="temp_point")
+                self.temp_point_ids.append(point_id)
+
+                if len(self.points) > 1:
+                    prev = self.points[-2]
+                    px = int(round(prev[0] * self.zoom_scale)) + self.img_x
+                    py = int(round(prev[1] * self.zoom_scale)) + self.img_y
+                    line_id = self.canvas.create_line(px, py, sx, sy, fill="red", width=2,tags="temp_line")
+                    self.temp_line_ids.append(line_id)
+            elif self.label_mode == "rectangle":
+                self.rect_start = (self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+                self.rect_preview_id = self.canvas.create_rectangle(*self.rect_start, *self.rect_start, outline="red", width=2)
+
+
+        def on_drag(event):
+            if self.label_mode == "rectangle" and hasattr(self, "rect_preview_id"):
+                x0, y0 = self.rect_start
+                x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+                self.canvas.coords(self.rect_preview_id, x0, y0, x1, y1)
+
+        def on_release(event):
+            if self.label_mode != "rectangle" or not hasattr(self, "rect_preview_id"):
+                return
+
+            x0, y0 = self.rect_start
+            x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+
+            region_w = abs(x1 - x0)
+            region_h = abs(y1 - y0)
+            min_size = 10  
+
+            if region_w < min_size or region_h < min_size:
+                self.canvas.delete(self.rect_preview_id)
+                del self.rect_preview_id
+                self.rect_start = None
                 return  
-            self.points.append((img_x, img_y))
+
+            self.canvas.delete(self.rect_preview_id)
+            del self.rect_preview_id
+            self.rect_start = None
+
+            img_x0 = (x0 - self.img_x) / self.zoom_scale
+            img_y0 = (y0 - self.img_y) / self.zoom_scale
+            img_x1 = (x1 - self.img_x) / self.zoom_scale
+            img_y1 = (y1 - self.img_y) / self.zoom_scale
+
+            rect_pts = [
+                (img_x0, img_y0),
+                (img_x1, img_y0),
+                (img_x1, img_y1),
+                (img_x0, img_y1)
+            ]
+            self.points = rect_pts
             self.edit_redo_stack.clear()
-            sx = int(round(img_x * self.zoom_scale)) + self.img_x
-            sy = int(round(img_y * self.zoom_scale)) + self.img_y
-            point_id = self.canvas.create_oval(sx-3, sy-3, sx+3, sy+3, fill="red",tags="temp_point")
-            self.temp_point_ids.append(point_id)
+            on_right_click(event)
 
-            if len(self.points) > 1:
-                prev = self.points[-2]
-                px = int(round(prev[0] * self.zoom_scale)) + self.img_x
-                py = int(round(prev[1] * self.zoom_scale)) + self.img_y
-                line_id = self.canvas.create_line(px, py, sx, sy, fill="red", width=2,tags="temp_line")
-                self.temp_line_ids.append(line_id)
-                
 
+   
         def on_right_click(event):
             if len(self.points) < 3:
                 messagebox.showinfo("Polygon Error", "Need at least 3 points to form a polygon.")
@@ -1677,7 +1792,19 @@ class Load_file:
 
         self.canvas.bind("<Button-1>", on_left_click)
         self.canvas.bind("<Button-3>", on_right_click)
+        self.canvas.bind("<B1-Motion>", on_drag)
+        self.canvas.bind("<ButtonRelease-1>", on_release)
+
         self.root.focus_set()
+    def toggle_shape_mode(self):
+        if self.label_mode == "polygon":
+            self.label_mode = "rectangle"
+            self.show_temp_message("Switched to Rectangle Labeling")
+        else:
+            self.label_mode = "polygon"
+            self.show_temp_message("Switched to Polygon Labeling")
+        self.labellingPressed()
+
         
     def handle_s_key(self, event=None):
         if self.label_popup_open and self.label_popup_ref:
@@ -1764,7 +1891,7 @@ class Load_file:
         except Exception as e:
             print("Update image failed:", e)
 
-    def reset_brightness_contrast(self):
+    def reset_brightness_contrast(self,event=None):
         if self.initial_display_img:
             self.img = self.initial_display_img.copy()
             self.img_tk = ImageTk.PhotoImage(self.img)
@@ -1897,7 +2024,7 @@ class Load_file:
         return os.path.exists(json_path) or os.path.exists(dat_path)
 
         
-    def convert_json_to_txt(self):
+    def convert_json_to_txt(self,event=None):
         if not self.ImagePath:
             self.show_temp_message("No image loaded")
             return
@@ -1937,7 +2064,7 @@ class Load_file:
             messagebox.showerror("Conversion Error", f"Failed to convert JSON to TXT:\n{e}")
 
 
-    def convert_json_to_cargomarkerxml(self):
+    def convert_json_to_cargomarkerxml(self,event=None):
         if not self.ImagePath:
             self.show_temp_message("No image loaded")
             return
@@ -1985,7 +2112,7 @@ class Load_file:
         except Exception as e:
             messagebox.showerror("Conversion Error", f"Failed to convert JSON to CargoMarker XML:\n{e}")
 
-    def convert_json_to_dat(self):
+    def convert_json_to_dat(self,event=None):
         if not self.ImagePath:
             self.show_temp_message("No image loaded")
             return
@@ -2030,38 +2157,6 @@ class Load_file:
 
         except Exception as e:
             messagebox.showerror("Conversion Error", f"Failed to convert JSON to DAT:\n{e}")
-
-    def show_convert_options(self):
-        popup = tk.Toplevel(self.root)
-        popup.title("Convert JSON to Format")
-        popup.geometry("300x200")
-        popup.transient(self.root)
-        popup.grab_set()
-
-        popup.update_idletasks()
-        root_x = self.root.winfo_rootx()
-        root_y = self.root.winfo_rooty()
-        root_w = self.root.winfo_width()
-        root_h = self.root.winfo_height()
-
-        popup_w = popup.winfo_width()
-        popup_h = popup.winfo_height()
-        
-        x = root_x + root_w - popup_w - 20
-        y = root_y + root_h - popup_h - 40
-        
-        popup.geometry(f"+{x}+{y}")
-
-        tk.Label(popup, text="Choose conversion format:", font=("Arial", 12)).pack(pady=10)
-
-        options = [
-            ("JSON to .txt", self.convert_json_to_txt),
-            ("JSON to .cargomarkerxml", self.convert_json_to_cargomarkerxml),
-            ("Json to .dat", self.convert_json_to_dat)
-        ]
-
-        for label, func in options:
-            tk.Button(popup, text=label, width=25, command=lambda f=func, p=popup: (f(), p.destroy())).pack(pady=5)
 
 if __name__ == "__main__":
     Load_file()
